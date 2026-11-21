@@ -11,6 +11,21 @@ namespace SharpEmu.Libs.Np;
 // and dereference it immediately after the call.
 public static class NpWebApiExports
 {
+    private static int _nextHandle;
+
+    public static void ResetHandles() => Volatile.Write(ref _nextHandle, 0);
+
+    [SysAbiExport(
+        Nid = "79M-JqvvGo0",
+        ExportName = "sceNpWebApiCreateHandle",
+        Target = Generation.Gen4,
+        LibraryName = "libSceNpWebApi")]
+    public static int NpWebApiCreateHandle(CpuContext ctx)
+    {
+        var handle = Interlocked.Increment(ref _nextHandle);
+        return ctx.SetReturn(handle);
+    }
+
     [SysAbiExport(
         Nid = "G3AnLNdRBjE",
         ExportName = "sceNpWebApiInitialize",
