@@ -703,7 +703,11 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
             {
                 Console.Error.WriteLine(
                     $"[RUNTIME] Module start failed: {moduleName} -> {result}");
-                return result;
+                // PS4 module entry points may return a non-zero value that is not
+                // an OrbisGen2Result (for example, EAWebKit's loader stub returns 1).
+                // The guest decides how to interpret it via sceKernelLoadStartModule;
+                // an eagerly preloaded module has no such caller here.
+                continue;
             }
         }
 
