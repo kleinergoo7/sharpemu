@@ -118,6 +118,14 @@ public sealed partial class DirectExecutionBackend
             {
                 return -1;
             }
+			// EXPERIMENTAL WORKAROUND (bf1-hacks branch only): Battlefield 1's
+			// exit destructor writes through a null R12. Supply scratch storage
+			// so the guest can finish teardown instead of faulting.
+			if (exceptionCode == 3221225477u &&
+				TryRecoverBf1NullDestructor(contextRecord, rip, exceptionRecord->ExceptionInformation[1]))
+			{
+				return -1;
+			}
 			if (MayBeGuestInt41(exceptionRecord) && TryRecoverGuestInt41(exceptionCode, contextRecord, rip))
 			{
 				return -1;
@@ -681,6 +689,36 @@ public sealed partial class DirectExecutionBackend
 		Environment.GetEnvironmentVariable("SHARPEMU_DISABLE_GUEST_ALLOCATOR_HOLE_RECOVERY"),
 		"1",
 		StringComparison.Ordinal);
+
+	private static nint _bf1Scratch;
+
+	private unsafe bool TryRecoverBf1NullDestructor(void* contextRecord, ulong rip, ulong faultAddress)
+	{
+		var second = rip == 0x333283E && faultAddress == 0x488 && ReadCtxU64(contextRecord, CTX_RAX) == 0;
+		var first = rip == 0x2EA2CE0 && faultAddress == 0x30 && ReadCtxU64(contextRecord, CTX_R12) == 0;
+		if (!first && !second)
+		{
+			return false;
+		}
+
+		if (_bf1Scratch == 0)
+		{
+			_bf1Scratch = Marshal.AllocHGlobal(0x2000);
+			new Span<byte>((void*)_bf1Scratch, 0x2000).Clear();
+		}
+
+		if (first)
+		{
+			WriteCtxU64(contextRecord, CTX_R12, (ulong)_bf1Scratch);
+		}
+		else
+		{
+			WriteCtxU64(contextRecord, CTX_RBX, (ulong)_bf1Scratch);
+		}
+
+		Console.Error.WriteLine($"[HACK] BF1 null-destructor workaround: rip=0x{rip:X16} scratch=0x{(ulong)_bf1Scratch:X16}");
+		return true;
+	}
 
 	private unsafe static bool TryRecoverGuestAllocatorHole(
 		EXCEPTION_RECORD* exceptionRecord,
