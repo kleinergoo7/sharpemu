@@ -77,6 +77,20 @@ public sealed class GuestBufferCacheTests : IClassFixture<HeadlessVulkanFixture>
     }
 
     [Fact]
+    public void UnbackedImageObtainUploadsZeroFilledStaging()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var harness = new CacheHarness(_vulkan);
+        var size = Page;
+        Assert.True(harness.Memory.TryHoldAvailableRange(0x2_0000_0000, size, harness.Granularity, out var address));
+        Assert.False(harness.Memory.IsBackedRange(address, 1));
+        var source = harness.Worker.Run(() => harness.Cache.ObtainBufferForImage(address, size));
+        var bytes = harness.ReadBack(source.Buffer, source.Offset, size);
+        Assert.All(bytes, value => Assert.Equal(0, value));
+        harness.Shutdown();
+    }
+
+    [Fact]
     public void ImageUploadFailureDistinguishesStagingCapacityFromBackingReads()
     {
         if (_vulkan is null) return;

@@ -27,6 +27,27 @@ internal static class ResidentImageBacking
         KernelMemoryCompatExports.TryReadPrtBacking(backing, address, destination) ||
         AllowHoles && TryReadResidentPrefix(backing, address, destination, allowHoles: true);
 
+    // A GPU-direct display buffer can be registered without any CPU-visible
+    // backing: the guest renders into it and the display reads it on the GPU
+    // side. When the first flip happens before any render, there are no guest
+    // bytes to upload, so present a cleared frame instead of treating the
+    // entire range as a fatal read error. Ranges with a backed first byte keep
+    // the strict checks below (a hole inside a resident image is still fatal).
+    internal static bool TryReadOrZeroIfUnbacked(IGuestBackedSpace backing, ulong address, Span<byte> destination) =>
+        TryRead(backing, address, destination) ||
+        ZeroIfUnbacked(backing, address, destination);
+
+    private static bool ZeroIfUnbacked(IGuestBackedSpace backing, ulong address, Span<byte> destination)
+    {
+        if (backing.IsBackedRange(address, 1))
+        {
+            return false;
+        }
+
+        destination.Clear();
+        return true;
+    }
+
     // Copies the backed prefix page by page and zero-fills the unmapped tail. A backed page
     // after a hole is not a mip chain, so it is rejected unless allowHoles.
     internal static bool TryReadResidentPrefix(IGuestBackedSpace backing, ulong address, Span<byte> destination) =>
