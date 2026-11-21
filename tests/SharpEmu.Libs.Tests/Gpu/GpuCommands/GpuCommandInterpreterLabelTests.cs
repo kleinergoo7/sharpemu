@@ -71,6 +71,7 @@ public sealed class GpuCommandInterpreterLabelTests
     [InlineData(0x2Fu, 0u, 0x00u, 2u, EndOfPipeWriteKind.Interrupt64)]
     [InlineData(0x04u, 5u, 0x3Bu, 2u, EndOfPipeWriteKind.InterruptWriteBack64)]
     [InlineData(0x28u, 0u, 0x38u, 2u, EndOfPipeWriteKind.InterruptWriteBack64)]
+    [InlineData(0x28u, 0u, 0x3Bu, 0u, EndOfPipeWriteKind.WriteBack64)]
     public void EndOfPipeWrite64_AcceptedCombinations(uint eventType, uint eventIndex, uint cacheAction, uint interruptSelector, EndOfPipeWriteKind expected)
     {
         var runner = new StreamRunner();

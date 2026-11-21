@@ -50,6 +50,38 @@ public sealed class KernelMemoryCompatExportsTests
         Assert.Equal(expectedIndex < 0 ? 0UL : address + (ulong)expectedIndex * 2, context[CpuRegister.Rax]);
     }
 
+    [Fact]
+    public void Memcpy_WritesToLibcHeapAllocation()
+    {
+        const ulong sourceAddress = GuestMemoryBase + 0x200;
+        var payload = Encoding.ASCII.GetBytes("SharpEmu libc heap memcpy");
+        var memory = new FakeCpuMemory(GuestMemoryBase, 0x4000);
+        Assert.True(memory.TryWrite(sourceAddress, payload));
+        var context = new CpuContext(memory, Generation.Gen5);
+
+        context[CpuRegister.Rdi] = (ulong)payload.Length;
+        Assert.Equal(0, KernelMemoryCompatExports.Malloc(context));
+        var destination = context[CpuRegister.Rax];
+        Assert.NotEqual(0UL, destination);
+
+        context[CpuRegister.Rdi] = destination;
+        context[CpuRegister.Rsi] = sourceAddress;
+        context[CpuRegister.Rdx] = (ulong)payload.Length;
+        Assert.Equal(0, KernelMemoryCompatExports.Memcpy(context));
+        Assert.Equal(destination, context[CpuRegister.Rax]);
+
+        const ulong readbackAddress = GuestMemoryBase + 0x300;
+        context[CpuRegister.Rdi] = readbackAddress;
+        context[CpuRegister.Rsi] = destination;
+        Assert.Equal(0, KernelMemoryCompatExports.Memcpy(context));
+        var written = new byte[payload.Length];
+        Assert.True(memory.TryRead(readbackAddress, written));
+        Assert.Equal(payload, written);
+
+        context[CpuRegister.Rdi] = destination;
+        Assert.Equal(0, KernelMemoryCompatExports.Free(context));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

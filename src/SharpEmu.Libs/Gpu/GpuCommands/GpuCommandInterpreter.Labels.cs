@@ -179,8 +179,16 @@ public sealed partial class GpuCommandInterpreter
                             }
 
                             break;
+                        // 0x3B is a GL2 writeback variant of 0x38 used by some
+                        // titles in EVENT_WRITE_EOP.
                         case 0x3B:
                             if (eopEventType == 0x04 && eventIndex == 0x05 && withInterrupt)
+                            {
+                                Write64(destination, value, withWriteBack: true, withInterrupt, eventId, interruptContextId);
+                                return;
+                            }
+
+                            if (eopEventType is 0x14 or 0x28 && eventIndex == 0x00 && !withInterrupt)
                             {
                                 Write64(destination, value, withWriteBack: true, withInterrupt, eventId, interruptContextId);
                                 return;
