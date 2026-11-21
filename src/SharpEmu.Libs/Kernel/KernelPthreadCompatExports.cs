@@ -171,7 +171,7 @@ public static class KernelPthreadCompatExports
         public int CompletionState { get; set; }
     }
 
-    private readonly record struct PthreadMutexAttrState(int Type, int Protocol);
+    private readonly record struct PthreadMutexAttrState(int Type, int Protocol, int ProcessShared = 0);
 
     private readonly record struct PthreadCondAttrState(int ClockId, int ProcessShared);
 
@@ -461,6 +461,14 @@ public static class KernelPthreadCompatExports
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libKernel")]
     public static int PthreadMutexattrSetprotocol(CpuContext ctx) => PthreadMutexattrSetprotocolCore(ctx, ctx[CpuRegister.Rdi], unchecked((int)ctx[CpuRegister.Rsi]));
+
+    [SysAbiExport(
+        Nid = "EXv3ztGqtDM",
+        ExportName = "pthread_mutexattr_setpshared",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadMutexattrSetpshared(CpuContext ctx)
+        => PthreadMutexattrSetpsharedCore(ctx, ctx[CpuRegister.Rdi], unchecked((int)ctx[CpuRegister.Rsi]));
 
     [SysAbiExport(
         Nid = "dQHWEsJtoE4",
@@ -1302,6 +1310,35 @@ public static class KernelPthreadCompatExports
             : (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT;
     }
 
+    private static int PthreadMutexattrSetpsharedCore(CpuContext ctx, ulong attrAddress, int pshared)
+    {
+        if (attrAddress == 0 || pshared is not PthreadProcessPrivate and not PthreadProcessShared)
+        {
+            return PosixInvalidArgument;
+        }
+
+        var resolvedAddress = ResolveMutexAttrHandle(ctx, attrAddress);
+        PthreadMutexAttrState updatedState;
+        lock (_stateGate)
+        {
+            if (!_mutexAttrStates.TryGetValue(resolvedAddress, out var state))
+            {
+                state = new PthreadMutexAttrState(MutexTypeErrorCheck, 0);
+            }
+
+            updatedState = state with { ProcessShared = pshared };
+            _mutexAttrStates[resolvedAddress] = updatedState;
+            if (resolvedAddress != attrAddress)
+            {
+                _mutexAttrStates[attrAddress] = updatedState;
+            }
+        }
+
+        return WriteMutexAttrObject(ctx, resolvedAddress, updatedState)
+            ? (int)OrbisGen2Result.ORBIS_GEN2_OK
+            : PosixBadAddress;
+    }
+
     private static int PthreadMutexattrSetprotocolCore(CpuContext ctx, ulong attrAddress, int protocol)
     {
         if (attrAddress == 0)
@@ -1790,7 +1827,8 @@ public static class KernelPthreadCompatExports
 
     private static bool WriteMutexAttrObject(CpuContext ctx, ulong address, PthreadMutexAttrState state) =>
         TryWriteUInt32(ctx, address, unchecked((uint)state.Type)) &&
-        TryWriteUInt32(ctx, address + 4, unchecked((uint)state.Protocol));
+        TryWriteUInt32(ctx, address + 4, unchecked((uint)state.Protocol)) &&
+        TryWriteUInt32(ctx, address + 8, unchecked((uint)state.ProcessShared));
 
     private static bool WriteCondAttrObject(CpuContext ctx, ulong address, PthreadCondAttrState state) =>
         TryWriteUInt32(ctx, address, unchecked((uint)state.ClockId)) &&

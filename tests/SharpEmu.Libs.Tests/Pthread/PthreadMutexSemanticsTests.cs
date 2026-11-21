@@ -97,6 +97,29 @@ public sealed class PthreadMutexExceptionTests
 
 public sealed class PthreadMutexSemanticsTests
 {
+    [Fact]
+    public void MutexattrSetpshared_StoresValueAndRejectsInvalidValues()
+    {
+        const ulong memoryBase = 0x1_0030_0000;
+        const ulong attributeAddress = memoryBase + 0x100;
+        var memory = new AllocatingCpuMemory(memoryBase, 0x4000);
+        var context = new CpuContext(memory, Generation.Gen4);
+        context[CpuRegister.Rdi] = attributeAddress;
+        Assert.Equal(0, KernelPthreadCompatExports.PthreadMutexattrInit(context));
+        Assert.True(context.TryReadUInt64(attributeAddress, out var handle));
+        Assert.NotEqual(0UL, handle);
+
+        context[CpuRegister.Rsi] = 1; // PTHREAD_PROCESS_SHARED
+        Assert.Equal(0, KernelPthreadCompatExports.PosixPthreadMutexattrSetpshared(context));
+        Assert.True(context.TryReadUInt32(handle + 8, out var stored));
+        Assert.Equal(1u, stored);
+
+        context[CpuRegister.Rsi] = 42;
+        Assert.NotEqual(0, KernelPthreadCompatExports.PosixPthreadMutexattrSetpshared(context));
+        Assert.True(context.TryReadUInt32(handle + 8, out stored));
+        Assert.Equal(1u, stored);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
