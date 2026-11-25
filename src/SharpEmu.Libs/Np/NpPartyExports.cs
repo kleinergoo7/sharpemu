@@ -42,4 +42,13 @@ public static class NpPartyExports
         Target = Generation.Gen4,
         LibraryName = "libSceNpParty")]
     public static int NpPartyCheckCallback(CpuContext ctx) => ctx.SetReturn(0);
+
+    [SysAbiExport(
+        Nid = "kA88gbv71ao",
+        ExportName = "sceNpPartyRegisterHandler",
+        Target = Generation.Gen4,
+        LibraryName = "libSceNpParty")]
+    public static int NpPartyRegisterHandler(CpuContext ctx) =>
+        // Offline play is never in a party, so registration has no party to join.
+        ctx.SetReturn(unchecked((int)0x80552506));
 }
