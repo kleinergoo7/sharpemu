@@ -160,6 +160,78 @@ public sealed class NetExportsTests
     }
 
     [Fact]
+    public void Getsockname_ReportsUnboundEndpoint()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        try
+        {
+            const ulong nameAddress = 0x1_0000_0100;
+            const ulong namelenAddress = 0x1_0000_0200;
+            Span<byte> length = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(length, 16);
+            Assert.True(memory.TryWrite(namelenAddress, length));
+
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = nameAddress;
+            context[CpuRegister.Rdx] = namelenAddress;
+            Assert.Equal(0, NetExports.NetGetsockname(context));
+
+            var result = new byte[16];
+            Assert.True(memory.TryRead(nameAddress, result));
+            Assert.Equal(16, result[0]);
+            Assert.Equal(2, result[1]);
+            Assert.Equal(0, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(result.AsSpan(2, 2)));
+            Assert.Equal(new byte[] { 0, 0, 0, 0 }, result.AsSpan(4, 4).ToArray());
+
+            var writtenLength = new byte[4];
+            Assert.True(memory.TryRead(namelenAddress, writtenLength));
+            Assert.Equal(16, System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(writtenLength));
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
+    }
+
+    [Fact]
+    public void Getsockname_ValidatesArguments()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        try
+        {
+            const ulong namelenAddress = 0x1_0000_0200;
+            Span<byte> length = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(length, 16);
+            Assert.True(memory.TryWrite(namelenAddress, length));
+
+            context[CpuRegister.Rdi] = 0;
+            context[CpuRegister.Rsi] = 0x1_0000_0100;
+            context[CpuRegister.Rdx] = namelenAddress;
+            Assert.Equal(unchecked((int)0x80410109), NetExports.NetGetsockname(context));
+
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = 0;
+            Assert.Equal(unchecked((int)0x8041010E), NetExports.NetGetsockname(context));
+
+            Span<byte> small = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(small, 4);
+            Assert.True(memory.TryWrite(namelenAddress, small));
+            context[CpuRegister.Rsi] = 0x1_0000_0100;
+            Assert.Equal(unchecked((int)0x80410116), NetExports.NetGetsockname(context));
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
+    }
+
+    [Fact]
     public void Ntohl_SwapsAllFourBytes()
     {
         _ctx[CpuRegister.Rdi] = 0x01020304;

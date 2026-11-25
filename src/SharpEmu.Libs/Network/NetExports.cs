@@ -282,6 +282,77 @@ public static class NetExports
     }
 
     [SysAbiExport(
+        Nid = "hoOAofhhRvE",
+        ExportName = "sceNetGetsockname",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceNet")]
+    public static int NetGetsockname(CpuContext ctx)
+    {
+        var id = unchecked((int)ctx[CpuRegister.Rdi]);
+        var nameAddress = ctx[CpuRegister.Rsi];
+        var namelenAddress = ctx[CpuRegister.Rdx];
+        if (!_sockets.TryGetValue(id, out var socket))
+        {
+            return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        }
+
+        if (nameAddress == 0 || namelenAddress == 0)
+        {
+            return SetNetError(ctx, NetErrorFault, NetErrnoFault);
+        }
+
+        Span<byte> lengthBuffer = stackalloc byte[4];
+        if (!ctx.Memory.TryRead(namelenAddress, lengthBuffer))
+        {
+            return SetNetError(ctx, NetErrorFault, NetErrnoFault);
+        }
+
+        var capacity = BinaryPrimitives.ReadInt32LittleEndian(lengthBuffer);
+        if (capacity < 8)
+        {
+            return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        }
+
+        // Unbound sockets report 0.0.0.0:0, matching BSD getsockname behavior.
+        var endpoint = new IPEndPoint(IPAddress.Any, 0);
+        try
+        {
+            if (socket.LocalEndPoint is IPEndPoint local)
+            {
+                endpoint = local;
+            }
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        {
+        }
+
+        Span<byte> sockaddr = stackalloc byte[16];
+        sockaddr[0] = 16;
+        sockaddr[1] = 2;
+        BinaryPrimitives.WriteUInt16BigEndian(sockaddr.Slice(2, 2), (ushort)endpoint.Port);
+        var addressBytes = endpoint.Address.GetAddressBytes();
+        if (addressBytes.Length == 4)
+        {
+            addressBytes.CopyTo(sockaddr.Slice(4, 4));
+        }
+
+        var writeLength = Math.Min(capacity, 16);
+        if (!ctx.Memory.TryWrite(nameAddress, sockaddr.Slice(0, writeLength)))
+        {
+            return SetNetError(ctx, NetErrorFault, NetErrnoFault);
+        }
+
+        BinaryPrimitives.WriteInt32LittleEndian(lengthBuffer, writeLength);
+        if (!ctx.Memory.TryWrite(namelenAddress, lengthBuffer))
+        {
+            return SetNetError(ctx, NetErrorFault, NetErrnoFault);
+        }
+
+        TraceNet("socket.getsockname", id, unchecked((ulong)endpoint.Port), 0, 0);
+        return ctx.SetReturn(0);
+    }
+
+    [SysAbiExport(
         Nid = "9wO9XrMsNhc",
         ExportName = "sceNetRecv",
         Target = Generation.Gen4 | Generation.Gen5,
