@@ -15,4 +15,22 @@ public static class AudioInExports
     public static int GetSilentState(CpuContext ctx) =>
         // No AudioIn ports can be opened until an input backend is implemented.
         ctx.SetReturn(unchecked((int)0x80260101));
+
+    [SysAbiExport(
+        Nid = "5NE8Sjc7VC8",
+        ExportName = "sceAudioInOpen",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceAudioIn")]
+    public static int Open(CpuContext ctx) =>
+        // No AudioIn ports can be opened until an input backend is implemented.
+        ctx.SetReturn(unchecked((int)0x80260109));
+
+    [SysAbiExport(
+        Nid = "Jh6WbHhnI68",
+        ExportName = "sceAudioInClose",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceAudioIn")]
+    public static int Close(CpuContext ctx) =>
+        // Nothing can be open while Open always fails, so any handle is stale.
+        ctx.SetReturn(unchecked((int)0x80260109));
 }
