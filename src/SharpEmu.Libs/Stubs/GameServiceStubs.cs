@@ -172,7 +172,7 @@ public static class GameServiceStubs
     public static int TextToSpeech2GetSpeechStatus(CpuContext ctx) => Ok(ctx);
 
     [SysAbiExport(Nid = "kvYEw2lBndk", ExportName = "sceGameLiveStreamingInitialize",
-        Target = Generation.Gen5, LibraryName = "libSceGameLiveStreaming")]
+        Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceGameLiveStreaming")]
     public static int GameLiveStreamingInitialize(CpuContext ctx) => Ok(ctx);
 
     [SysAbiExport(Nid = "isruqthpYcw", ExportName = "sceSharePlayInitialize",
