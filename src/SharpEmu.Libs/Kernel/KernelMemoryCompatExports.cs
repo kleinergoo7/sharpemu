@@ -3298,18 +3298,30 @@ public static partial class KernelMemoryCompatExports
             return MemoryFault;
         if (!IsValidMapRange(length, alignment) || (long)directMemoryStart < 0 ||
             !IsAligned(directMemoryStart, OrbisPageSize))
+        {
+            if (ShouldTraceDirectMemory())
+                Console.Error.WriteLine($"[LOADER][TRACE] map_direct failed=validation address=0x{inOutAddressPointer:X} size=0x{length:X} offset=0x{directMemoryStart:X} flags=0x{flags:X} protection=0x{protection:X} alignment=0x{alignment:X}");
             return MemoryInvalidArgument;
+        }
         if ((protection & OrbisProtCpuExec) != 0)
             return MemoryAccessDenied;
         if (!TryDecodeMappedProtection(protection, out var mode))
             return MemoryInvalidArgument;
         if (!ctx.TryReadUInt64(inOutAddressPointer, out var requested))
+        {
+            if (ShouldTraceDirectMemory())
+                Console.Error.WriteLine($"[LOADER][TRACE] map_direct failed=request-read address=0x{inOutAddressPointer:X} size=0x{length:X} offset=0x{directMemoryStart:X} flags=0x{flags:X}");
             return MemoryFault;
+        }
         alignment = alignment == 0 ? OrbisPageSize : alignment;
         if ((flags & OrbisKernelMapFixed) != 0 &&
             (requested == 0 || !IsAligned(requested, OrbisPageSize) ||
              !IsAligned(requested, alignment) || requested > ulong.MaxValue - length))
+        {
+            if (ShouldTraceDirectMemory())
+                Console.Error.WriteLine($"[LOADER][TRACE] map_direct failed=fixed-validation address=0x{inOutAddressPointer:X} requested=0x{requested:X} size=0x{length:X} offset=0x{directMemoryStart:X} flags=0x{flags:X} alignment=0x{alignment:X}");
             return MemoryInvalidArgument;
+        }
 
         lock (_memoryGate)
         {
