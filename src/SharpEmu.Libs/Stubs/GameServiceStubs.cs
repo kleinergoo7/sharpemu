@@ -175,6 +175,10 @@ public static class GameServiceStubs
         Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceGameLiveStreaming")]
     public static int GameLiveStreamingInitialize(CpuContext ctx) => Ok(ctx);
 
+    [SysAbiExport(Nid = "9yK6Fk8mKOQ", ExportName = "sceGameLiveStreamingTerminate",
+        Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceGameLiveStreaming")]
+    public static int GameLiveStreamingTerminate(CpuContext ctx) => Ok(ctx);
+
     [SysAbiExport(Nid = "isruqthpYcw", ExportName = "sceSharePlayInitialize",
         Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceSharePlay")]
     public static int SharePlayInitialize(CpuContext ctx) => Ok(ctx);
