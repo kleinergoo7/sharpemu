@@ -299,4 +299,259 @@ public sealed class Audio3dExportsTests
         Assert.True(memory.TryRead(address, bytes));
         return BinaryPrimitives.ReadUInt32LittleEndian(bytes);
     }
+
+    private static void WriteU32(FakeCpuMemory memory, ulong address, uint value)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
+        Assert.True(memory.TryWrite(address, bytes));
+    }
+
+    private static void WriteU64(FakeCpuMemory memory, ulong address, ulong value)
+    {
+        Span<byte> bytes = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        Assert.True(memory.TryWrite(address, bytes));
+    }
+
+    private static void SetObjectPcm(CpuContext context, FakeCpuMemory memory, uint port, uint handle,
+        uint format, byte[] samples, float gain)
+    {
+        const ulong descAddress = MemoryBase + 0x400;
+        const ulong samplesAddress = MemoryBase + 0x500;
+        const ulong gainAddress = MemoryBase + 0x600;
+        const ulong arrayAddress = MemoryBase + 0x700;
+
+        Assert.True(memory.TryWrite(samplesAddress, samples));
+        Span<byte> gainBytes = stackalloc byte[4];
+        BinaryPrimitives.WriteSingleLittleEndian(gainBytes, gain);
+        Assert.True(memory.TryWrite(gainAddress, gainBytes));
+
+        Span<byte> descriptor = stackalloc byte[24];
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor, format);
+        BinaryPrimitives.WriteUInt64LittleEndian(descriptor.Slice(8, 8), samplesAddress);
+        BinaryPrimitives.WriteUInt32LittleEndian(descriptor.Slice(16, 4), (uint)(samples.Length / (format == 1 ? 4 : 2)));
+        Assert.True(memory.TryWrite(descAddress, descriptor));
+
+        Span<byte> entries = stackalloc byte[48];
+        BinaryPrimitives.WriteUInt32LittleEndian(entries, 1);
+        BinaryPrimitives.WriteUInt64LittleEndian(entries.Slice(8, 8), descAddress);
+        BinaryPrimitives.WriteUInt64LittleEndian(entries.Slice(16, 8), 24);
+        BinaryPrimitives.WriteUInt32LittleEndian(entries.Slice(24, 4), 5);
+        BinaryPrimitives.WriteUInt64LittleEndian(entries.Slice(32, 8), gainAddress);
+        BinaryPrimitives.WriteUInt64LittleEndian(entries.Slice(40, 8), 4);
+        Assert.True(memory.TryWrite(arrayAddress, entries));
+
+        context[CpuRegister.Rdi] = port;
+        context[CpuRegister.Rsi] = handle;
+        context[CpuRegister.Rdx] = 2;
+        context[CpuRegister.Rcx] = arrayAddress;
+        Assert.Equal(0, Audio3dExports.ObjectSetAttributes(context));
+    }
+
+    [Fact]
+    public void Mixer_FoldsMonoToBothChannels()
+    {
+        var samples = new byte[] { 0x00, 0x40, 0x00, 0xC0, 0x00, 0x00, 0xFF, 0x7F };
+        var sources = new List<(byte[] Data, uint Format, float Gain)> { (samples, 0, 1.0f) };
+        var mixed = Audio3dExports.MixStereoFrames(sources, 4);
+
+        Assert.Equal(new byte[]
+        {
+            0xFF, 0x3F, 0xFF, 0x3F,
+            0x01, 0xC0, 0x01, 0xC0,
+            0x00, 0x00, 0x00, 0x00,
+            0xFE, 0x7F, 0xFE, 0x7F,
+        }, mixed);
+    }
+
+    [Fact]
+    public void Mixer_SilentGainDropsTheFrame()
+    {
+        var samples = new byte[] { 0x00, 0x40, 0x00, 0x40 };
+        var sources = new List<(byte[] Data, uint Format, float Gain)> { (samples, 0, 0.0f) };
+        Assert.Equal(new byte[8], Audio3dExports.MixStereoFrames(sources, 2));
+    }
+
+    [Fact]
+    public void Mixer_SumsSourcesAndClamps()
+    {
+        var loud = new byte[] { 0xFF, 0x7F, 0xFF, 0x7F };
+        var sources = new List<(byte[] Data, uint Format, float Gain)>
+        {
+            (loud, 0, 1.0f),
+            (loud, 0, 1.0f),
+        };
+        var mixed = Audio3dExports.MixStereoFrames(sources, 2);
+
+        Assert.Equal(new byte[] { 0xFF, 0x7F, 0xFF, 0x7F, 0xFF, 0x7F, 0xFF, 0x7F }, mixed);
+    }
+
+    [Fact]
+    public void Mixer_FoldsFloatSamples()
+    {
+        var samples = new byte[8];
+        BinaryPrimitives.WriteSingleLittleEndian(samples, 0.5f);
+        BinaryPrimitives.WriteSingleLittleEndian(samples.AsSpan(4), -0.25f);
+        var sources = new List<(byte[] Data, uint Format, float Gain)> { (samples, 1, 1.0f) };
+        var mixed = Audio3dExports.MixStereoFrames(sources, 2);
+
+        var expected = new byte[8];
+        BinaryPrimitives.WriteInt16LittleEndian(expected, 16383);
+        BinaryPrimitives.WriteInt16LittleEndian(expected.AsSpan(2), 16383);
+        BinaryPrimitives.WriteInt16LittleEndian(expected.AsSpan(4), -8191);
+        BinaryPrimitives.WriteInt16LittleEndian(expected.AsSpan(6), -8191);
+        Assert.Equal(expected, mixed);
+    }
+
+    [Fact]
+    public void Advance_RejectsPortsWithoutAdvanceCapability()
+    {
+        var context = NewContext(out var memory);
+        try
+        {
+            context[CpuRegister.Rdi] = 0;
+            Assert.Equal(0, Audio3dExports.Initialize(context));
+
+            const ulong paramsAddress = MemoryBase + 0x100;
+            const ulong idAddress = MemoryBase + 0x200;
+            WriteParams(memory, paramsAddress, bufferMode: 0);
+            context[CpuRegister.Rdi] = 0xFF;
+            context[CpuRegister.Rsi] = paramsAddress;
+            context[CpuRegister.Rdx] = idAddress;
+            Assert.Equal(0, Audio3dExports.PortOpen(context));
+            var port = ReadU32(memory, idAddress);
+
+            context[CpuRegister.Rdx] = 99;
+            Assert.Equal(unchecked((int)0x80EA0002), Audio3dExports.PortAdvance(context));
+
+            context[CpuRegister.Rdi] = port;
+            Assert.Equal(unchecked((int)0x80EA0008), Audio3dExports.PortAdvance(context));
+        }
+        finally
+        {
+            Audio3dExports.ResetRuntimeState();
+        }
+    }
+
+    [Fact]
+    public void Advance_RefusesWhenMixedQueueFull()
+    {
+        var context = NewContext(out var memory);
+        try
+        {
+            context[CpuRegister.Rdi] = 0;
+            Assert.Equal(0, Audio3dExports.Initialize(context));
+            var port = OpenDefaultPort(context, memory, out _);
+
+            context[CpuRegister.Rdi] = port;
+            Assert.Equal(0, Audio3dExports.PortAdvance(context));
+            Assert.Equal(0, Audio3dExports.PortAdvance(context));
+            Assert.Equal(unchecked((int)NotReady), Audio3dExports.PortAdvance(context));
+        }
+        finally
+        {
+            Audio3dExports.ResetRuntimeState();
+        }
+    }
+
+    [Fact]
+    public void Push_RequiresPushCapabilityAndDepth()
+    {
+        var context = NewContext(out var memory);
+        try
+        {
+            context[CpuRegister.Rdi] = 0;
+            Assert.Equal(0, Audio3dExports.Initialize(context));
+            var port = OpenDefaultPort(context, memory, out _);
+
+            context[CpuRegister.Rdi] = 99;
+            context[CpuRegister.Rsi] = 0;
+            Assert.Equal(unchecked((int)0x80EA0002), Audio3dExports.PortPush(context));
+
+            context[CpuRegister.Rdi] = port;
+            Assert.Equal(0, Audio3dExports.PortPush(context));
+            Assert.Equal(0, Audio3dExports.PortPush(context));
+
+            context[CpuRegister.Rdi] = port;
+            context[CpuRegister.Rsi] = 1;
+            Assert.Equal(0, Audio3dExports.PortPush(context));
+        }
+        finally
+        {
+            Audio3dExports.ResetRuntimeState();
+        }
+    }
+
+    [Fact]
+    public void Flush_DrainsMixedFrames()
+    {
+        var context = NewContext(out var memory);
+        try
+        {
+            context[CpuRegister.Rdi] = 0;
+            Assert.Equal(0, Audio3dExports.Initialize(context));
+            var port = OpenDefaultPort(context, memory, out _);
+
+            context[CpuRegister.Rdi] = 99;
+            Assert.Equal(unchecked((int)0x80EA0002), Audio3dExports.PortFlush(context));
+
+            context[CpuRegister.Rdi] = port;
+            Assert.Equal(0, Audio3dExports.PortFlush(context));
+            Assert.Equal(0, Audio3dExports.PortAdvance(context));
+            Assert.Equal(0, Audio3dExports.PortFlush(context));
+        }
+        finally
+        {
+            Audio3dExports.ResetRuntimeState();
+        }
+    }
+
+    [Fact]
+    public void UnreservedObject_IsReapedAfterMixDrainsItsQueue()
+    {
+        var context = NewContext(out var memory);
+        try
+        {
+            context[CpuRegister.Rdi] = 0;
+            Assert.Equal(0, Audio3dExports.Initialize(context));
+
+            const ulong paramsAddress = MemoryBase + 0x100;
+            const ulong idAddress = MemoryBase + 0x200;
+            const ulong objectAddress = MemoryBase + 0x300;
+            WriteParams(memory, paramsAddress, maxObjects: 1);
+            context[CpuRegister.Rdi] = 0xFF;
+            context[CpuRegister.Rsi] = paramsAddress;
+            context[CpuRegister.Rdx] = idAddress;
+            Assert.Equal(0, Audio3dExports.PortOpen(context));
+            var port = ReadU32(memory, idAddress);
+
+            context[CpuRegister.Rdi] = port;
+            context[CpuRegister.Rsi] = objectAddress;
+            Assert.Equal(0, Audio3dExports.ObjectReserve(context));
+            var handle = ReadU32(memory, objectAddress);
+
+            var samples = new byte[0x100 * 2];
+            samples[0] = 0x00;
+            samples[1] = 0x40;
+            SetObjectPcm(context, memory, port, handle, 0, samples, 1.0f);
+
+            context[CpuRegister.Rdi] = port;
+            context[CpuRegister.Rsi] = handle;
+            Assert.Equal(0, Audio3dExports.ObjectUnreserve(context));
+
+            context[CpuRegister.Rsi] = objectAddress;
+            Assert.Equal(unchecked((int)0x80EA0006), Audio3dExports.ObjectReserve(context));
+
+            context[CpuRegister.Rdi] = port;
+            Assert.Equal(0, Audio3dExports.PortAdvance(context));
+
+            context[CpuRegister.Rsi] = objectAddress;
+            Assert.Equal(0, Audio3dExports.ObjectReserve(context));
+        }
+        finally
+        {
+            Audio3dExports.ResetRuntimeState();
+        }
+    }
 }

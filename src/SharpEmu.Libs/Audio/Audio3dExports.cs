@@ -17,6 +17,10 @@ public static class Audio3dExports
     private const int Audio3dErrorInvalidParameter = unchecked((int)0x80EA0004);
     private const int Audio3dErrorOutOfResources = unchecked((int)0x80EA0006);
     private const int Audio3dErrorNotReady = unchecked((int)0x80EA0007);
+    private const int Audio3dErrorNotSupported = unchecked((int)0x80EA0008);
+
+    private const uint BufferModeNoAdvance = 0;
+    private const uint BufferModeAdvanceAndPush = 2;
 
     private const uint MaxPorts = 4;
     private const uint MaxObjects = 0x200;
@@ -46,6 +50,7 @@ public static class Audio3dExports
         public uint BufferMode;
         public readonly Dictionary<uint, Audio3dObject> Objects = new();
         public uint NextObjectId;
+        public readonly Queue<byte[]> MixedQueue = new();
     }
 
     private sealed class Audio3dObject
@@ -59,6 +64,247 @@ public static class Audio3dExports
     {
         public required byte[] Data;
         public required uint Format;
+    }
+
+    private const float DownmixFront = 1.0f;
+    private const float DownmixCenter = 0.7071f;
+    private const float DownmixSurround = 0.7071f;
+
+    // Mixes one granularity-sized stereo S16 frame from already-popped object
+    // audio, mirroring the reference fold: mono folds to both channels, gain
+    // applies per object (default 0 silences), output clamps to [-1, 1].
+    internal static byte[] MixStereoFrames(
+        List<(byte[] Data, uint Format, float Gain)> sources, uint granularity)
+    {
+        var mix = new float[granularity * 2];
+        foreach (var (data, format, gain) in sources)
+        {
+            if (gain == 0.0f)
+            {
+                continue;
+            }
+
+            var bytesPerSample = format == PcmFormatFloat ? sizeof(float) : sizeof(short);
+            var channels = data.Length / bytesPerSample / (int)Math.Max(granularity, 1);
+            for (uint frame = 0; frame < granularity; frame++)
+            {
+                float left;
+                float right;
+                if (channels <= 1)
+                {
+                    left = ReadMonoSample(data, format, frame);
+                    right = left;
+                }
+                else
+                {
+                    left = ReadChannelSample(data, format, channels, frame, 0) * DownmixFront;
+                    right = ReadChannelSample(data, format, channels, frame, 1) * DownmixFront;
+                    if (channels >= 3)
+                    {
+                        var center = ReadChannelSample(data, format, channels, frame, 2) * DownmixCenter;
+                        left += center;
+                        right += center;
+                    }
+
+                    if (channels >= 6)
+                    {
+                        left += ReadChannelSample(data, format, channels, frame, 4) * DownmixSurround;
+                        right += ReadChannelSample(data, format, channels, frame, 5) * DownmixSurround;
+                    }
+
+                    if (channels >= 8)
+                    {
+                        left += ReadChannelSample(data, format, channels, frame, 6) * DownmixSurround;
+                        right += ReadChannelSample(data, format, channels, frame, 7) * DownmixSurround;
+                    }
+                }
+
+                mix[frame * 2] += left * gain;
+                mix[frame * 2 + 1] += right * gain;
+            }
+        }
+
+        var output = new byte[granularity * 4];
+        for (var i = 0; i < mix.Length; i++)
+        {
+            var clamped = Math.Clamp(mix[i], -1.0f, 1.0f);
+            BinaryPrimitives.WriteInt16LittleEndian(output.AsSpan(i * 2, 2), (short)(clamped * 32767.0f));
+        }
+
+        return output;
+    }
+
+    private static float ReadMonoSample(byte[] data, uint format, uint frame)
+    {
+        return format == PcmFormatFloat
+            ? BinaryPrimitives.ReadSingleLittleEndian(data.AsSpan((int)frame * 4, 4))
+            : BinaryPrimitives.ReadInt16LittleEndian(data.AsSpan((int)frame * 2, 2)) / 32768.0f;
+    }
+
+    private static float ReadChannelSample(byte[] data, uint format, int channels, uint frame, int channel)
+    {
+        if (format == PcmFormatFloat)
+        {
+            return BinaryPrimitives.ReadSingleLittleEndian(
+                data.AsSpan(((int)frame * channels + channel) * 4, 4));
+        }
+
+        return BinaryPrimitives.ReadInt16LittleEndian(
+            data.AsSpan(((int)frame * channels + channel) * 2, 2)) / 32768.0f;
+    }
+
+    private static float ReadGain(Audio3dObject obj)
+    {
+        if (obj.Attributes.TryGetValue(AttributeGain, out var blob) && blob.Length >= sizeof(float))
+        {
+            return BinaryPrimitives.ReadSingleLittleEndian(blob.AsSpan(0, 4));
+        }
+
+        return 0.0f;
+    }
+
+    private static void MixPortFrame(Audio3dPort port)
+    {
+        var sources = new List<(byte[] Data, uint Format, float Gain)>();
+        foreach (var obj in port.Objects.Values)
+        {
+            if (obj.PcmQueue.Count == 0)
+            {
+                continue;
+            }
+
+            var frame = obj.PcmQueue.Dequeue();
+            sources.Add((frame.Data, frame.Format, ReadGain(obj)));
+        }
+
+        var remove = new List<uint>();
+        foreach (var (id, obj) in port.Objects)
+        {
+            if (obj.Unreserved && obj.PcmQueue.Count == 0)
+            {
+                remove.Add(id);
+            }
+        }
+
+        foreach (var id in remove)
+        {
+            port.Objects.Remove(id);
+        }
+
+        port.MixedQueue.Enqueue(MixStereoFrames(sources, port.Granularity));
+    }
+
+    [SysAbiExport(
+        Nid = "lw0qrdSjZt8",
+        ExportName = "sceAudio3dPortAdvance",
+        Target = Generation.Gen4,
+        LibraryName = "libSceAudio3d")]
+    public static int PortAdvance(CpuContext ctx)
+    {
+        var portId = unchecked((uint)ctx[CpuRegister.Rdi]);
+        lock (_stateGate)
+        {
+            if (!_ports.TryGetValue(portId, out var port))
+            {
+                return ctx.SetReturn(Audio3dErrorInvalidPort);
+            }
+
+            if (port.BufferMode == BufferModeNoAdvance)
+            {
+                return ctx.SetReturn(Audio3dErrorNotSupported);
+            }
+
+            if (port.MixedQueue.Count >= port.QueueDepth)
+            {
+                return ctx.SetReturn(Audio3dErrorNotReady);
+            }
+
+            MixPortFrame(port);
+            return ctx.SetReturn(0);
+        }
+    }
+
+    [SysAbiExport(
+        Nid = "ZOGrxWLgQzE",
+        ExportName = "sceAudio3dPortFlush",
+        Target = Generation.Gen4,
+        LibraryName = "libSceAudio3d")]
+    public static int PortFlush(CpuContext ctx)
+    {
+        var portId = unchecked((uint)ctx[CpuRegister.Rdi]);
+        lock (_stateGate)
+        {
+            if (!_ports.TryGetValue(portId, out var port))
+            {
+                return ctx.SetReturn(Audio3dErrorInvalidPort);
+            }
+
+            var hasPending = false;
+            foreach (var obj in port.Objects.Values)
+            {
+                if (obj.PcmQueue.Count != 0)
+                {
+                    hasPending = true;
+                    break;
+                }
+            }
+
+            if (port.MixedQueue.Count == 0 && hasPending)
+            {
+                MixPortFrame(port);
+            }
+
+            if (port.MixedQueue.Count == 0)
+            {
+                return ctx.SetReturn(0);
+            }
+
+            port.MixedQueue.Clear();
+            return ctx.SetReturn(0);
+        }
+    }
+
+    [SysAbiExport(
+        Nid = "VEVhZ9qd4ZY",
+        ExportName = "sceAudio3dPortPush",
+        Target = Generation.Gen4,
+        LibraryName = "libSceAudio3d")]
+    public static int PortPush(CpuContext ctx)
+    {
+        var portId = unchecked((uint)ctx[CpuRegister.Rdi]);
+        var blocking = unchecked((uint)ctx[CpuRegister.Rsi]);
+        lock (_stateGate)
+        {
+            if (!_ports.TryGetValue(portId, out var port))
+            {
+                return ctx.SetReturn(Audio3dErrorInvalidPort);
+            }
+
+            if (port.BufferMode != BufferModeAdvanceAndPush)
+            {
+                return ctx.SetReturn(Audio3dErrorNotSupported);
+            }
+
+            if (port.MixedQueue.Count < port.QueueDepth)
+            {
+                return ctx.SetReturn(0);
+            }
+
+            // No host 3D backend is wired yet: submitted frames are released
+            // after queue accounting instead of reaching audio output.
+            port.MixedQueue.Dequeue();
+            if (blocking == 0)
+            {
+                return ctx.SetReturn(0);
+            }
+
+            while (port.MixedQueue.Count >= port.QueueDepth)
+            {
+                port.MixedQueue.Dequeue();
+            }
+
+            return ctx.SetReturn(0);
+        }
     }
 
     public static void ResetRuntimeState()
