@@ -74,6 +74,91 @@ public sealed class NetExportsTests
         Assert.Equal(0x04030201UL, _ctx[CpuRegister.Rax]);
     }
 
+    private static ulong OpenDatagramSocket(CpuContext context)
+    {
+        context[CpuRegister.Rsi] = 2; // AF_INET
+        context[CpuRegister.Rdx] = 2; // SOCK_DGRAM
+        context[CpuRegister.Rcx] = 17; // UDP
+        Assert.Equal(0, NetExports.NetSocket(context));
+        return context[CpuRegister.Rax];
+    }
+
+    private static void CloseSocket(CpuContext context, ulong socket)
+    {
+        context[CpuRegister.Rdi] = socket;
+        NetExports.NetSocketClose(context);
+    }
+
+    [Fact]
+    public void Shutdown_ValidatesArgumentsAndIsIdempotent()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        try
+        {
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = 1; // SHUT_WR
+            Assert.Equal(0, NetExports.NetShutdown(context));
+            Assert.Equal(0, NetExports.NetShutdown(context));
+
+            context[CpuRegister.Rsi] = 3;
+            Assert.Equal(unchecked((int)0x80410116), NetExports.NetShutdown(context));
+
+            context[CpuRegister.Rdi] = 0;
+            context[CpuRegister.Rsi] = 1;
+            Assert.Equal(unchecked((int)0x80410109), NetExports.NetShutdown(context));
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
+    }
+
+    [Fact]
+    public void Shutdown_ClosesDropRecordedDirections()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        context[CpuRegister.Rdi] = socket;
+        context[CpuRegister.Rsi] = 0; // SHUT_RD
+        Assert.Equal(0, NetExports.NetShutdown(context));
+        CloseSocket(context, socket);
+
+        context[CpuRegister.Rdi] = socket;
+        context[CpuRegister.Rsi] = 0;
+        Assert.Equal(unchecked((int)0x80410109), NetExports.NetShutdown(context));
+    }
+
+    [Fact]
+    public void Recv_AfterReadShutdownReturnsEndOfStream()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        try
+        {
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = 0; // SHUT_RD
+            Assert.Equal(0, NetExports.NetShutdown(context));
+
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = 0x1_0000_0000;
+            context[CpuRegister.Rdx] = 64;
+            context[CpuRegister.Rcx] = 0;
+            Assert.Equal(0, NetExports.NetRecv(context));
+            Assert.Equal(0UL, context[CpuRegister.Rax]);
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
+    }
+
     [Fact]
     public void Ntohl_SwapsAllFourBytes()
     {

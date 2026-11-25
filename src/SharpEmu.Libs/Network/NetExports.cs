@@ -48,6 +48,7 @@ public static class NetExports
     private static readonly ConcurrentDictionary<int, NetPool> _pools = new();
     private static readonly ConcurrentDictionary<int, ResolverContext> _resolvers = new();
     private static readonly ConcurrentDictionary<int, Socket> _sockets = new();
+    private static readonly ConcurrentDictionary<int, int> _shutdownDirections = new();
     private static readonly object EpollGate = new();
     private static readonly Dictionary<int, NetEpollContext> _epolls = new();
     private static int _nextPoolId;
@@ -160,6 +161,7 @@ public static class NetExports
             socket.Dispose();
         }
         _sockets.Clear();
+        _shutdownDirections.Clear();
         TraceNet("term", 0, 0, 0, 0);
         return ctx.SetReturn(0);
     }
@@ -245,8 +247,37 @@ public static class NetExports
             return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
         }
 
+        _shutdownDirections.TryRemove(id, out _);
         socket.Dispose();
         TraceNet("socket.close", id, 0, 0, 0);
+        return ctx.SetReturn(0);
+    }
+
+    [SysAbiExport(
+        Nid = "TSM6whtekok",
+        ExportName = "sceNetShutdown",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libSceNet")]
+    public static int NetShutdown(CpuContext ctx)
+    {
+        var id = unchecked((int)ctx[CpuRegister.Rdi]);
+        var how = unchecked((int)ctx[CpuRegister.Rsi]);
+        if (!_sockets.ContainsKey(id))
+        {
+            return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        }
+
+        if (how is < 0 or > 2)
+        {
+            return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        }
+
+        // These sockets are never connected, so a host Socket.Shutdown would throw
+        // NotConnected. Record the direction locally instead; the read side is
+        // observed as end-of-stream by the receive path.
+        var mask = how == 2 ? 3 : 1 << how;
+        _shutdownDirections.AddOrUpdate(id, mask, (_, existing) => existing | mask);
+        TraceNet("socket.shutdown", id, unchecked((ulong)how), 0, 0);
         return ctx.SetReturn(0);
     }
 
@@ -284,6 +315,12 @@ public static class NetExports
         }
 
         if (requested == 0)
+        {
+            return ctx.SetReturn(0);
+        }
+
+        // A shut-down read side reads as end-of-stream, matching BSD recv behavior.
+        if (_shutdownDirections.TryGetValue(id, out var directions) && (directions & 1) != 0)
         {
             return ctx.SetReturn(0);
         }
