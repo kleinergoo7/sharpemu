@@ -23,4 +23,19 @@ public sealed class GameLiveStreamingExportTests
         var context = new CpuContext(new FakeCpuMemory(0x1_0000_0000, 0x1000), generation);
         Assert.Equal(0, GameServiceStubs.GameLiveStreamingInitialize(context));
     }
+
+    [Theory]
+    [InlineData(Generation.Gen4)]
+    [InlineData(Generation.Gen5)]
+    public void SharePlayInitializeIsRegisteredForBothGenerations(Generation generation)
+    {
+        var manager = new ModuleManager();
+        manager.RegisterExports(SharpEmu.Generated.SysAbiExportRegistry.CreateExports(generation));
+
+        Assert.True(manager.TryGetExport("isruqthpYcw", out var export));
+        Assert.Equal("sceSharePlayInitialize", export.Name);
+
+        var context = new CpuContext(new FakeCpuMemory(0x1_0000_0000, 0x1000), generation);
+        Assert.Equal(0, GameServiceStubs.SharePlayInitialize(context));
+    }
 }
