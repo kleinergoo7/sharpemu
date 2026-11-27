@@ -1,6 +1,11 @@
 // Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+using System.Buffers.Binary;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net.Sockets;
+using System.Reflection;
 using SharpEmu.HLE;
 using SharpEmu.Libs.Network;
 using Xunit;
@@ -298,5 +303,124 @@ public sealed class NetExportsTests
         _ctx[CpuRegister.Rdi] = 0x0102;
         NetExports.NetHtons(_ctx);
         Assert.NotEqual(0UL, _ctx[CpuRegister.Rax]);
+    }
+
+    [Fact]
+    public void Getsockname_Ipv6ReturnsExplicitError()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        context[CpuRegister.Rdi] = 0;
+        context[CpuRegister.Rsi] = 28; // AF_INET6
+        context[CpuRegister.Rdx] = 2; // SOCK_DGRAM
+        context[CpuRegister.Rcx] = 17; // UDP
+        Assert.Equal(0, NetExports.NetSocket(context));
+        var socket = context[CpuRegister.Rax];
+
+        try
+        {
+            const ulong nameAddress = 0x1_0000_0100;
+            const ulong namelenAddress = 0x1_0000_0200;
+            Span<byte> length = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(length, 16);
+            Assert.True(memory.TryWrite(namelenAddress, length));
+
+            var previousLog = Environment.GetEnvironmentVariable("SHARPEMU_LOG_NET");
+            Environment.SetEnvironmentVariable("SHARPEMU_LOG_NET", "1");
+            var writer = new StringWriter();
+            var previousError = Console.Error;
+            Console.SetError(writer);
+            try
+            {
+                context[CpuRegister.Rdi] = socket;
+                context[CpuRegister.Rsi] = nameAddress;
+                context[CpuRegister.Rdx] = namelenAddress;
+                Assert.Equal(unchecked((int)0x80410116), NetExports.NetGetsockname(context));
+                Assert.Contains("getsockname.unsupported", writer.ToString());
+            }
+            finally
+            {
+                Console.SetError(previousError);
+                Environment.SetEnvironmentVariable("SHARPEMU_LOG_NET", previousLog);
+            }
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
+    }
+
+    [Fact]
+    public void Getsockname_DisposedSocketReturnsErrorAndLogs()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        var field = typeof(NetExports).GetField("_sockets", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(field);
+        var sockets = (ConcurrentDictionary<int, Socket>)field.GetValue(null)!;
+        Assert.True(sockets.TryGetValue(unchecked((int)socket), out var host));
+        host!.Dispose();
+
+        try
+        {
+            const ulong nameAddress = 0x1_0000_0100;
+            const ulong namelenAddress = 0x1_0000_0200;
+            Span<byte> length = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(length, 16);
+            Assert.True(memory.TryWrite(namelenAddress, length));
+
+            var previousLog = Environment.GetEnvironmentVariable("SHARPEMU_LOG_NET");
+            Environment.SetEnvironmentVariable("SHARPEMU_LOG_NET", "1");
+            var writer = new StringWriter();
+            var previousError = Console.Error;
+            Console.SetError(writer);
+            try
+            {
+                context[CpuRegister.Rdi] = socket;
+                context[CpuRegister.Rsi] = nameAddress;
+                context[CpuRegister.Rdx] = namelenAddress;
+                Assert.Equal(unchecked((int)0x80410109), NetExports.NetGetsockname(context));
+                Assert.Contains("getsockname.disposed", writer.ToString());
+            }
+            finally
+            {
+                Console.SetError(previousError);
+                Environment.SetEnvironmentVariable("SHARPEMU_LOG_NET", previousLog);
+            }
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
+    }
+
+    [Fact]
+    public void Send_AfterShutdownWriteReturnsError()
+    {
+        var memory = new FakeCpuMemory(0x1_0000_0000, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen5);
+        var socket = OpenDatagramSocket(context);
+
+        try
+        {
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = 1; // SHUT_WR
+            Assert.Equal(0, NetExports.NetShutdown(context));
+
+            context[CpuRegister.Rdi] = socket;
+            context[CpuRegister.Rsi] = 0x1_0000_0100;
+            context[CpuRegister.Rdx] = 4;
+            Assert.Equal(unchecked((int)0x80410116), NetExports.PosixSend(context));
+
+            // Zero-length sends still succeed; only real payloads are rejected.
+            context[CpuRegister.Rdx] = 0;
+            Assert.Equal(0, NetExports.PosixSend(context));
+        }
+        finally
+        {
+            CloseSocket(context, socket);
+        }
     }
 }

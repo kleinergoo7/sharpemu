@@ -314,6 +314,13 @@ public static class NetExports
         }
 
         // Unbound sockets report 0.0.0.0:0, matching BSD getsockname behavior.
+        // Only IPv4 endpoints are representable in the 16-byte sockaddr shape.
+        if (socket.AddressFamily != AddressFamily.InterNetwork)
+        {
+            TraceNet("socket.getsockname.unsupported", id, 0, 0, 0);
+            return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        }
+
         var endpoint = new IPEndPoint(IPAddress.Any, 0);
         try
         {
@@ -322,8 +329,21 @@ public static class NetExports
                 endpoint = local;
             }
         }
-        catch (Exception ex) when (ex is SocketException or ObjectDisposedException)
+        catch (SocketException ex)
         {
+            TraceNet("socket.getsockname.error", id, unchecked((ulong)ex.SocketErrorCode), 0, 0);
+            return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
+        }
+        catch (ObjectDisposedException)
+        {
+            TraceNet("socket.getsockname.disposed", id, 0, 0, 0);
+            return SetNetError(ctx, NetErrorBadFileDescriptor, NetErrnoBadFileDescriptor);
+        }
+
+        if (endpoint.AddressFamily != AddressFamily.InterNetwork)
+        {
+            TraceNet("socket.getsockname.unsupported", id, unchecked((ulong)endpoint.Port), 0, 0);
+            return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
         }
 
         Span<byte> sockaddr = stackalloc byte[16];
@@ -331,10 +351,7 @@ public static class NetExports
         sockaddr[1] = 2;
         BinaryPrimitives.WriteUInt16BigEndian(sockaddr.Slice(2, 2), (ushort)endpoint.Port);
         var addressBytes = endpoint.Address.GetAddressBytes();
-        if (addressBytes.Length == 4)
-        {
-            addressBytes.CopyTo(sockaddr.Slice(4, 4));
-        }
+        addressBytes.CopyTo(sockaddr.Slice(4, 4));
 
         var writeLength = Math.Min(capacity, 16);
         if (!ctx.Memory.TryWrite(nameAddress, sockaddr.Slice(0, writeLength)))
@@ -636,6 +653,14 @@ public static class NetExports
         if (length == 0)
         {
             return ctx.SetReturn(0);
+        }
+
+        // A shut-down write side rejects sends, mirroring how the receive
+        // path reports end-of-stream after SHUT_RD.
+        if (_shutdownDirections.TryGetValue(id, out var directions) && (directions & 2) != 0)
+        {
+            TraceNet("socket.send.shutdown", id, unchecked((ulong)length), 0, 0);
+            return SetNetError(ctx, NetErrorInvalidArgument, NetErrnoInvalidArgument);
         }
 
         var payload = new byte[length];
