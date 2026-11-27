@@ -111,7 +111,14 @@ public static partial class ImageRequestBuilders
             }
         }
 
-        var depthAddress = copyMode && writeBuffer ? depthWords.ZWriteBase : depthWords.ZReadBase;
+        // Depth writes land in DB_Z_WRITE_BASE. It normally equals DB_Z_READ_BASE,
+        // but a title can bind different read and write surfaces (for example a
+        // depth resolve); honour the write surface when writes are enabled.
+        var depthAddress = copyMode && writeBuffer
+            ? depthWords.ZWriteBase
+            : !copyMode && !depthWords.DepthWriteDisabled && depthWords.ZWriteBase != 0
+                ? depthWords.ZWriteBase
+                : depthWords.ZReadBase;
         var stencilAddress = copyMode && writeBuffer ? depthWords.StencilWriteBase : depthWords.StencilReadBase;
 
         // The size register is independent state; a zero encoding alone must not produce an attachment.
@@ -146,7 +153,7 @@ public static partial class ImageRequestBuilders
         // slice and no per-tile HTILE state, so the bits do not change what is rendered.
         if (depthWords.CopyDepthToColor || depthWords.CopyStencilToColor || depthWords.CopyCentroid || depthWords.CopySample != 0 ||
             depthWords.MaxMip != 0 || depthWords.ViewMipLevel != 0 || unsupportedShadingRate ||
-            depthAddress == 0 || (!copyMode && !depthWords.DepthWriteDisabled && depthWords.ZWriteBase != depthWords.ZReadBase) || (depthAddress & 0xFFFF) != 0 || depthWords.DepthCompare > 7)
+            depthAddress == 0 || (depthAddress & 0xFFFF) != 0 || depthWords.DepthCompare > 7)
         {
             throw SubmissionScheduler.Fatal(
                 $"The depth register state is not supported: zInfo=0x{depthWords.ZInfo:X8} stencilInfo=0x{depthWords.StencilInfo:X8} view=0x{depthWords.DepthView:X8} " +
