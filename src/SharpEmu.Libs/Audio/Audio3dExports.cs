@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Buffers.Binary;
+using System.Threading;
 using SharpEmu.HLE;
 
 namespace SharpEmu.Libs.Audio;
@@ -41,6 +42,7 @@ public static class Audio3dExports
     private static readonly object _stateGate = new();
     private static bool _initialized;
     private static readonly Dictionary<uint, Audio3dPort> _ports = new();
+    private static long _pushDropTraceCount;
 
     private sealed class Audio3dPort
     {
@@ -293,6 +295,7 @@ public static class Audio3dExports
             // No host 3D backend is wired yet: submitted frames are released
             // after queue accounting instead of reaching audio output.
             port.MixedQueue.Dequeue();
+            TracePushDropped(portId);
             if (blocking == 0)
             {
                 return ctx.SetReturn(0);
@@ -301,6 +304,7 @@ public static class Audio3dExports
             while (port.MixedQueue.Count >= port.QueueDepth)
             {
                 port.MixedQueue.Dequeue();
+                TracePushDropped(portId);
             }
 
             return ctx.SetReturn(0);
@@ -314,6 +318,8 @@ public static class Audio3dExports
             _initialized = false;
             _ports.Clear();
         }
+
+        Interlocked.Exchange(ref _pushDropTraceCount, 0);
     }
 
     [SysAbiExport(
@@ -463,7 +469,13 @@ public static class Audio3dExports
 
         if (maxObjects > MaxObjects)
         {
-            maxObjects = MaxObjects;
+            TraceAudio3d($"port-open max-objects={maxObjects} exceeds limit={MaxObjects}");
+            if (!TryWriteUInt32(ctx, portIdAddress, InvalidPortId))
+            {
+                return ctx.SetReturn((int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+            }
+
+            return ctx.SetReturn(Audio3dErrorOutOfResources);
         }
 
         lock (_stateGate)
@@ -635,7 +647,7 @@ public static class Audio3dExports
 
             if (!port.Objects.TryGetValue(objectId, out var obj))
             {
-                return ctx.SetReturn(0);
+                return ctx.SetReturn(Audio3dErrorInvalidObject);
             }
 
             if (obj.Unreserved)
@@ -726,7 +738,8 @@ public static class Audio3dExports
     {
         if (valueSize < PcmDescriptorSize)
         {
-            return 0;
+            TraceAudio3d($"object-set-attributes short-pcm-descriptor size={valueSize} expected={PcmDescriptorSize}");
+            return Audio3dErrorInvalidParameter;
         }
 
         Span<byte> descriptor = stackalloc byte[PcmDescriptorSize];
@@ -738,6 +751,12 @@ public static class Audio3dExports
         var format = BinaryPrimitives.ReadUInt32LittleEndian(descriptor);
         var bufferAddress = BinaryPrimitives.ReadUInt64LittleEndian(descriptor.Slice(8, 8));
         var numSamples = BinaryPrimitives.ReadUInt32LittleEndian(descriptor.Slice(16, 4));
+        if (format != PcmFormatS16 && format != PcmFormatFloat)
+        {
+            TraceAudio3d($"object-set-attributes unsupported-pcm-format format={format}");
+            return Audio3dErrorInvalidParameter;
+        }
+
         if (bufferAddress == 0 || numSamples == 0)
         {
             return Audio3dErrorInvalidParameter;
@@ -796,5 +815,22 @@ public static class Audio3dExports
         Span<byte> bytes = stackalloc byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
         return ctx.Memory.TryWrite(address, bytes);
+    }
+
+    private static void TraceAudio3d(string message)
+    {
+        if (string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_AUDIO3D"), "1", StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine($"[LOADER][TRACE] audio3d.{message}");
+        }
+    }
+
+    private static void TracePushDropped(uint portId)
+    {
+        var n = Interlocked.Increment(ref _pushDropTraceCount);
+        if (n <= 8 || n % 500 == 0)
+        {
+            TraceAudio3d($"port-push#{n} port={portId} frames-released-without-audio-output reason=no-host-backend");
+        }
     }
 }
