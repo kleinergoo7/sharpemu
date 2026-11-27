@@ -21,11 +21,7 @@ public static partial class NpManagerExports
         ExportName = "sceNpCheckCallback",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libSceNpManager")]
-    public static int NpCheckCallback(CpuContext ctx)
-    {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
-    }
+    public static int NpCheckCallback(CpuContext ctx) => DispatchStateCallbacks(ctx, "sceNpCheckCallback");
 
     [SysAbiExport(Nid = "eiqMCt9UshI", ExportName = "sceNpCreateAsyncRequest", Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceNpManager")]
     public static int NpCreateAsyncRequest(CpuContext ctx) => SetReturn(ctx, NextRequestId());
@@ -117,11 +113,7 @@ public static partial class NpManagerExports
         ExportName = "sceNpCheckCallbackForLib",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libSceNpManager")]
-    public static int NpCheckCallbackForLib(CpuContext ctx)
-    {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
-    }
+    public static int NpCheckCallbackForLib(CpuContext ctx) => DispatchStateCallbacks(ctx, "sceNpCheckCallbackForLib");
 
     // Offline profile: the online id payload is left untouched and the call
     // reports success, matching the other offline NpManager stubs here.
@@ -143,29 +135,26 @@ public static partial class NpManagerExports
         LibraryName = "libSceNpManager")]
     public static int NpRegisterStateCallback(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var callback = ctx[CpuRegister.Rdi];
+        var userData = ctx[CpuRegister.Rsi];
+        if (callback == 0)
+        {
+            return SetReturn(ctx, NpErrorInvalidArgument);
+        }
+
+        var result = NpStateCallbackState.RegisterLegacy(callback, userData);
+        TraceNp($"register_state_callback cb=0x{callback:X16} userdata=0x{userData:X16} result=0x{unchecked((uint)result):X8}");
+        return SetReturn(ctx, result);
     }
 
-    // Registration keeps nothing, so there is nothing to drop. Death Stranding unregisters on every
-    // network retry while offline.
     [SysAbiExport(
         Nid = "M3wFXbYQtAA",
         ExportName = "sceNpUnregisterStateCallbackA",
         Target = Generation.Gen4 | Generation.Gen5,
         LibraryName = "libSceNpManager")]
-    public static int NpUnregisterStateCallbackA(CpuContext ctx)
-    {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
-    }
+    public static int NpUnregisterStateCallbackA(CpuContext ctx) =>
+        SetReturn(ctx, NpStateCallbackState.UnregisterA(unchecked((int)ctx[CpuRegister.Rdi])));
 
-    /// <summary>
-    /// Accepts the reachability callback and never invokes it. Reachability
-    /// transitions only ever fire on a real PSN connection, which an offline
-    /// session does not have, so registering successfully and staying silent is
-    /// the accurate emulation of a signed-out console rather than a stub.
-    /// </summary>
     [SysAbiExport(
         Nid = "hw5KNqAAels",
         ExportName = "sceNpRegisterNpReachabilityStateCallback",
@@ -173,8 +162,13 @@ public static partial class NpManagerExports
         LibraryName = "libSceNpManager")]
     public static int NpRegisterNpReachabilityStateCallback(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var callback = ctx[CpuRegister.Rdi];
+        if (callback != 0)
+        {
+            NpStateCallbackState.RegisterReachability(callback, ctx[CpuRegister.Rsi]);
+        }
+
+        return SetReturn(ctx, callback == 0 ? NpErrorInvalidArgument : 0);
     }
 
     /// <summary>
@@ -203,8 +197,19 @@ public static partial class NpManagerExports
         LibraryName = "libSceNpManager")]
     public static int NpRegisterStateCallbackA(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var callback = ctx[CpuRegister.Rdi];
+        var userData = ctx[CpuRegister.Rsi];
+        if (callback == 0)
+        {
+            return SetReturn(ctx, NpErrorInvalidArgument);
+        }
+
+        // The real ABI returns the callback id directly (np_manager.cpp:1007-1010
+        // returns RegisterStateCallbackA, which returns i + 1 at np_manager.cpp:857-884);
+        // there is no separate out-param, unlike what the 0-returning siblings suggest.
+        var id = NpStateCallbackState.RegisterA(callback, userData);
+        TraceNp($"register_state_callback_a cb=0x{callback:X16} userdata=0x{userData:X16} id={id}");
+        return SetReturn(ctx, id);
     }
 
     [SysAbiExport(
@@ -214,8 +219,13 @@ public static partial class NpManagerExports
         LibraryName = "libSceNpManagerForToolkit")]
     public static int NpRegisterStateCallbackForToolkit(CpuContext ctx)
     {
-        ctx[CpuRegister.Rax] = 0;
-        return (int)OrbisGen2Result.ORBIS_GEN2_OK;
+        var callback = ctx[CpuRegister.Rdi];
+        if (callback != 0)
+        {
+            NpStateCallbackState.RegisterToolkit(callback, ctx[CpuRegister.Rsi]);
+        }
+
+        return SetReturn(ctx, callback == 0 ? NpErrorInvalidArgument : 0);
     }
 
     [SysAbiExport(
@@ -374,6 +384,113 @@ public static partial class NpManagerExports
             : System.Text.Encoding.ASCII.GetString(bytes[..length]);
     }
 
+    private static int DispatchStateCallbacks(CpuContext ctx, string reason)
+    {
+        var scheduler = GuestThreadExecution.Scheduler;
+        if (scheduler is null)
+        {
+            // No guest thread pump exists to observe the transition, so drop
+            // rather than grow the queue without bound.
+            var dropped = NpStateCallbackState.DropPending();
+            if (dropped > 0)
+            {
+                TraceNp($"dispatch_state_callback_dropped_no_scheduler count={dropped} from={reason}");
+            }
+
+            return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_OK);
+        }
+
+        while (NpStateCallbackState.TryTakeDispatch(
+                   out var stateEvent,
+                   out var legacy,
+                   out var callbacks,
+                   out var toolkit,
+                   out var reachability))
+        {
+            TraceNp(
+                $"dispatch_state_callback user={stateEvent.UserId} state={stateEvent.State} " +
+                $"from={reason} legacy={legacy is not null} a={callbacks.Length} toolkit={toolkit is not null}");
+
+            if (legacy is { } classic)
+            {
+                _ = scheduler.TryCallGuestFunction(
+                    ctx,
+                    classic.Callback,
+                    stateEvent.UserId,
+                    unchecked((ulong)stateEvent.State),
+                    0,
+                    classic.UserData,
+                    0,
+                    0,
+                    "np_state_callback",
+                    out _,
+                    out var legacyError);
+                if (legacyError is not null)
+                {
+                    TraceNp($"state_callback_failed: {legacyError}");
+                }
+            }
+
+            foreach (var (callback, userData) in callbacks)
+            {
+                _ = scheduler.TryCallGuestFunction(
+                    ctx,
+                    callback,
+                    stateEvent.UserId,
+                    unchecked((ulong)stateEvent.State),
+                    userData,
+                    0,
+                    0,
+                    "np_state_callback_a",
+                    out _,
+                    out var callbackError);
+                if (callbackError is not null)
+                {
+                    TraceNp($"state_callback_a_failed: {callbackError}");
+                }
+            }
+
+            if (toolkit is { } toolkitCallback)
+            {
+                _ = scheduler.TryCallGuestFunction(
+                    ctx,
+                    toolkitCallback.Callback,
+                    stateEvent.UserId,
+                    unchecked((ulong)stateEvent.State),
+                    toolkitCallback.UserData,
+                    0,
+                    0,
+                    "np_state_callback_toolkit",
+                    out _,
+                    out var toolkitError);
+                if (toolkitError is not null)
+                {
+                    TraceNp($"state_callback_toolkit_failed: {toolkitError}");
+                }
+            }
+
+            if (reachability is { } reachabilityCallback)
+            {
+                _ = scheduler.TryCallGuestFunction(
+                    ctx,
+                    reachabilityCallback.Callback,
+                    stateEvent.UserId,
+                    NpStateCallbackState.ReachabilityUnavailable,
+                    reachabilityCallback.UserData,
+                    0,
+                    0,
+                    "np_reachability_callback",
+                    out _,
+                    out var reachabilityError);
+                if (reachabilityError is not null)
+                {
+                    TraceNp($"reachability_callback_failed: {reachabilityError}");
+                }
+            }
+        }
+
+        return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_OK);
+    }
     private static void TraceNp(string message)
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_NP"), "1", StringComparison.Ordinal))
@@ -383,7 +500,6 @@ public static partial class NpManagerExports
 
         Console.Error.WriteLine($"[LOADER][TRACE] np.{message}");
     }
-
     private static int WriteOfflineOnlineId(CpuContext ctx, ulong address)
     {
         if (address == 0)
