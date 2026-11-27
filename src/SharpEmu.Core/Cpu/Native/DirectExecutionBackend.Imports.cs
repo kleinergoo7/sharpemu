@@ -33,6 +33,11 @@ public sealed partial class DirectExecutionBackend
 	private const int ImportVectorRegisterCount = 8;
 	private const ulong StackCheckGuardValue = 0xC0DEC0DECAFEBA00UL;
 	private static long _canaryReturnRecoveries;
+	// Snapshot at process start: mid-process toggles of the variable are ignored.
+	private static readonly bool _logAllImportResults = string.Equals(
+		Environment.GetEnvironmentVariable("SHARPEMU_LOG_ALL_IMPORT_RESULTS"),
+		"1",
+		StringComparison.Ordinal);
 
 	private readonly object _importResultLogSampleGate = new();
 	private readonly Dictionary<string, int> _importResultLogSamples = new(StringComparer.Ordinal);
@@ -887,6 +892,13 @@ public sealed partial class DirectExecutionBackend
 				}
 			}
 			var guestReturnValue = cpuContext[CpuRegister.Rax];
+			if (_logAllImportResults)
+			{
+				Console.Error.WriteLine(
+					$"[LOADER][TRACE] import-result#{num} {importStubEntry.Nid} " +
+					$"rax=0x{guestReturnValue:X16} ret=0x{num7:X16} " +
+					$"thread=0x{GuestThreadExecution.CurrentGuestThreadHandle:X16}");
+			}
 			if (probeTarget)
 			{
 				ulong finalReturnSlot;

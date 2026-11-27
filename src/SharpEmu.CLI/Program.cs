@@ -57,6 +57,7 @@ internal static partial class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        FullDiagnostics.Apply();
         ConfigureManagedPluginResolution();
         if (args is [LaunchConfiguration.ShortcutArgument, var shortcutGame])
         {
