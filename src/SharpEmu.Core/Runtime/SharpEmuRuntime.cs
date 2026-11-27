@@ -29,7 +29,7 @@ namespace SharpEmu.Core.Runtime;
 
 public sealed class SharpEmuRuntime : ISharpEmuRuntime
 {
-    private readonly record struct LoadedModuleImage(string Path, SelfImage Image, int Handle, bool StartAtBoot);
+    internal readonly record struct LoadedModuleImage(string Path, SelfImage Image, int Handle, bool StartAtBoot);
 
     private static readonly HashSet<string> PreloadSkipModules = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -656,41 +656,124 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
         return false;
     }
 
+    internal static IReadOnlyList<int> ResolveInitializerDependencies(
+        LoadedModuleImage module,
+        IReadOnlyDictionary<string, LoadedModuleImage> modulesByName)
+    {
+        var ordered = new List<int>();
+        var queued = new HashSet<int>();
+        var visiting = new HashSet<int>();
+
+        void Visit(LoadedModuleImage current)
+        {
+            if (!visiting.Add(current.Handle))
+            {
+                return;
+            }
+
+            foreach (var importedName in current.Image.ImportedModuleNames)
+            {
+                if (!TryResolveModuleByName(importedName, modulesByName, out var dependency) ||
+                    dependency.Handle == module.Handle)
+                {
+                    continue;
+                }
+
+                Visit(dependency);
+            }
+
+            visiting.Remove(current.Handle);
+            if (current.Handle != module.Handle && queued.Add(current.Handle))
+            {
+                ordered.Add(current.Handle);
+            }
+        }
+
+        Visit(module);
+        return ordered;
+    }
+
+    internal static bool TryResolveModuleByName(
+        string importedName,
+        IReadOnlyDictionary<string, LoadedModuleImage> modulesByName,
+        out LoadedModuleImage module)
+    {
+        var name = Path.GetFileName(importedName);
+        var stem = Path.GetExtension(name).Length == 0
+            ? name
+            : Path.GetFileNameWithoutExtension(name);
+
+        // PRX files commonly drop the DT_NEEDED "lib" prefix on disk (for
+        // example libJavaScriptCore.prx imports the JavaScriptCore.prx file).
+        var stems = new[] { stem };
+        if (stem.StartsWith("lib", StringComparison.OrdinalIgnoreCase) && stem.Length > 3)
+        {
+            stems = new[] { stem, stem[3..] };
+        }
+        else if (!stem.StartsWith("lib", StringComparison.OrdinalIgnoreCase))
+        {
+            stems = new[] { stem, "lib" + stem };
+        }
+
+        foreach (var candidate in stems)
+        {
+            if (modulesByName.TryGetValue(candidate, out module) ||
+                modulesByName.TryGetValue(candidate + ".prx", out module) ||
+                modulesByName.TryGetValue(candidate + ".sprx", out module))
+            {
+                return true;
+            }
+        }
+
+        module = default;
+        return false;
+    }
+
     private OrbisGen2Result? RunPreloadedModuleInitializers(
         IReadOnlyList<LoadedModuleImage> loadedModuleImages,
         Generation generation,
         IReadOnlyDictionary<ulong, string> activeImportStubs,
         IReadOnlyDictionary<string, ulong> activeRuntimeSymbols)
     {
+        var modulesByName = new Dictionary<string, LoadedModuleImage>(StringComparer.OrdinalIgnoreCase);
+        var modulesByHandle = new Dictionary<int, LoadedModuleImage>();
+        var indexByHandle = new Dictionary<int, int>();
+        for (var index = 0; index < loadedModuleImages.Count; index++)
+        {
+            var entry = loadedModuleImages[index];
+            var name = Path.GetFileName(entry.Path);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                modulesByName.TryAdd(name, entry);
+            }
+            modulesByHandle[entry.Handle] = entry;
+            indexByHandle[entry.Handle] = index;
+        }
+
         OrbisGen2Result? initFailure = null;
 
-        for (var i = 0; i < loadedModuleImages.Count; i++)
+        void StartModule(LoadedModuleImage loadedModule, int index, string? reason)
         {
-            var loadedModule = loadedModuleImages[i];
-            if (!loadedModule.StartAtBoot)
-            {
-                continue;
-            }
-
             var initEntryPoint = loadedModule.Image.InitFunctionEntryPoint;
             if (initEntryPoint < 0x10000)
             {
-                continue;
+                return;
             }
 
             if (!KernelModuleRegistry.TryBeginModuleStart(loadedModule.Handle, out _))
             {
-                continue;
+                return;
             }
 
             var moduleName = Path.GetFileName(loadedModule.Path);
             if (string.IsNullOrWhiteSpace(moduleName))
             {
-                moduleName = $"module#{i}";
+                moduleName = $"module#{index}";
             }
 
             Console.Error.WriteLine(
-                $"[RUNTIME] Starting module {moduleName}: dt_init=0x{initEntryPoint:X16}");
+                $"[RUNTIME] Starting module {moduleName}: dt_init=0x{initEntryPoint:X16}" +
+                (reason is null ? string.Empty : $" ({reason})"));
 
             var result = _cpuDispatcher.DispatchModuleInitializer(
                 initEntryPoint,
@@ -713,13 +796,62 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
                 {
                     Console.Error.WriteLine(
                         $"[RUNTIME] Module start tolerated stub result: {moduleName} -> {result}");
-                    continue;
+                    return;
                 }
 
                 Console.Error.WriteLine(
                     $"[RUNTIME] Module start failed: {moduleName} -> {result}");
                 initFailure ??= result;
             }
+        }
+
+        // Start every imported module before any boot-starting module: a PRX
+        // that is only linked at boot cannot assume the guest later calls
+        // sceKernelLoadStartModule for its own DT_NEEDED dependencies.
+        var startupOrder = new List<int>();
+        var queuedHandles = new HashSet<int>();
+        for (var pass = 0; pass < 2; pass++)
+        {
+            for (var i = 0; i < loadedModuleImages.Count; i++)
+            {
+                var loadedModule = loadedModuleImages[i];
+                if (!loadedModule.StartAtBoot)
+                {
+                    continue;
+                }
+
+                if (pass == 0)
+                {
+                    foreach (var dependencyHandle in ResolveInitializerDependencies(loadedModule, modulesByName))
+                    {
+                        if (queuedHandles.Add(dependencyHandle))
+                        {
+                            startupOrder.Add(dependencyHandle);
+                        }
+                    }
+                }
+                else if (queuedHandles.Add(loadedModule.Handle))
+                {
+                    startupOrder.Add(loadedModule.Handle);
+                }
+            }
+        }
+
+        foreach (var handle in startupOrder)
+        {
+            if (!modulesByHandle.TryGetValue(handle, out var loadedModule))
+            {
+                continue;
+            }
+
+            if (KernelModuleRegistry.TryGetModuleByHandle(handle, out var registered) &&
+                registered.StartState != KernelModuleRegistry.ModuleStartState.NotStarted)
+            {
+                continue;
+            }
+
+            var reason = loadedModule.StartAtBoot ? null : "imported dependency";
+            StartModule(loadedModule, indexByHandle[handle], reason);
         }
 
         return initFailure;
@@ -908,6 +1040,14 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
                 InstallNativePluginCompatibilityHooks(importStubs, moduleImage, modulePath);
                 var moduleHandle = RegisterLoadedModule(modulePath, moduleImage, isMain: false, isSystemModule: false);
                 var moduleName = Path.GetFileName(modulePath);
+                if (string.Equals(
+                        Environment.GetEnvironmentVariable("SHARPEMU_LOG_MODULE_DEPS"),
+                        "1",
+                        StringComparison.Ordinal))
+                {
+                    Console.Error.WriteLine(
+                        $"[LOADER][TRACE] module_deps {moduleName} needs: {string.Join(",", moduleImage.ImportedModuleNames)}");
+                }
                 var startAtBoot = moduleEntry.StartAtBoot ||
                     string.Equals(moduleName, "libfmod.prx", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(moduleName, "libfmodstudio.prx", StringComparison.OrdinalIgnoreCase);
