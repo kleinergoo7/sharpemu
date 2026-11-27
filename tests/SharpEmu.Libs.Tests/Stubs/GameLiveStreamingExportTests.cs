@@ -9,11 +9,14 @@ namespace SharpEmu.Libs.Tests.Stubs;
 
 public sealed class GameLiveStreamingExportTests
 {
+    private const int InvalidArgument = (int)OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT;
+
     [Theory]
     [InlineData(Generation.Gen4)]
     [InlineData(Generation.Gen5)]
     public void InitializeIsRegisteredForBothGenerations(Generation generation)
     {
+        GameServiceStubs.ResetServiceLifetimeForTests();
         var manager = new ModuleManager();
         manager.RegisterExports(SharpEmu.Generated.SysAbiExportRegistry.CreateExports(generation));
 
@@ -22,6 +25,11 @@ public sealed class GameLiveStreamingExportTests
 
         var context = new CpuContext(new FakeCpuMemory(0x1_0000_0000, 0x1000), generation);
         Assert.Equal(0, GameServiceStubs.GameLiveStreamingInitialize(context));
+        Assert.True(GameServiceStubs.IsGameLiveStreamingInitialized);
+
+        // Re-init is the boot gate staying open: still success.
+        Assert.Equal(0, GameServiceStubs.GameLiveStreamingInitialize(context));
+        Assert.True(GameServiceStubs.IsGameLiveStreamingInitialized);
     }
 
     [Theory]
@@ -29,6 +37,7 @@ public sealed class GameLiveStreamingExportTests
     [InlineData(Generation.Gen5)]
     public void SharePlayInitializeIsRegisteredForBothGenerations(Generation generation)
     {
+        GameServiceStubs.ResetServiceLifetimeForTests();
         var manager = new ModuleManager();
         manager.RegisterExports(SharpEmu.Generated.SysAbiExportRegistry.CreateExports(generation));
 
@@ -37,6 +46,11 @@ public sealed class GameLiveStreamingExportTests
 
         var context = new CpuContext(new FakeCpuMemory(0x1_0000_0000, 0x1000), generation);
         Assert.Equal(0, GameServiceStubs.SharePlayInitialize(context));
+        Assert.True(GameServiceStubs.IsSharePlayInitialized);
+
+        // Re-init is the boot gate staying open: still success.
+        Assert.Equal(0, GameServiceStubs.SharePlayInitialize(context));
+        Assert.True(GameServiceStubs.IsSharePlayInitialized);
     }
 
     [Theory]
@@ -44,6 +58,7 @@ public sealed class GameLiveStreamingExportTests
     [InlineData(Generation.Gen5)]
     public void LiveStreamingTerminateIsRegisteredForBothGenerations(Generation generation)
     {
+        GameServiceStubs.ResetServiceLifetimeForTests();
         var manager = new ModuleManager();
         manager.RegisterExports(SharpEmu.Generated.SysAbiExportRegistry.CreateExports(generation));
 
@@ -51,6 +66,20 @@ public sealed class GameLiveStreamingExportTests
         Assert.Equal("sceGameLiveStreamingTerminate", export.Name);
 
         var context = new CpuContext(new FakeCpuMemory(0x1_0000_0000, 0x1000), generation);
+        Assert.Equal(0, GameServiceStubs.GameLiveStreamingInitialize(context));
         Assert.Equal(0, GameServiceStubs.GameLiveStreamingTerminate(context));
+        Assert.False(GameServiceStubs.IsGameLiveStreamingInitialized);
+    }
+
+    [Theory]
+    [InlineData(Generation.Gen4)]
+    [InlineData(Generation.Gen5)]
+    public void LiveStreamingTerminateWithoutInitializeReportsError(Generation generation)
+    {
+        GameServiceStubs.ResetServiceLifetimeForTests();
+
+        var context = new CpuContext(new FakeCpuMemory(0x1_0000_0000, 0x1000), generation);
+        Assert.Equal(InvalidArgument, GameServiceStubs.GameLiveStreamingTerminate(context));
+        Assert.False(GameServiceStubs.IsGameLiveStreamingInitialized);
     }
 }

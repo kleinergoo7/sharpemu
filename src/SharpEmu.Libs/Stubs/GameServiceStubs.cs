@@ -171,17 +171,86 @@ public static class GameServiceStubs
         Target = Generation.Gen5, LibraryName = "libSceTextToSpeech2")]
     public static int TextToSpeech2GetSpeechStatus(CpuContext ctx) => Ok(ctx);
 
+    // GameLiveStreaming/SharePlay lifetime: initialize always succeeds (it is the
+    // boot gate and re-init is harmless), while terminate without a matching
+    // initialize reports a caller error instead of silently succeeding.
+    private static readonly object ServiceLifetimeGate = new();
+    private static bool GameLiveStreamingInitialized;
+    private static bool SharePlayInitialized;
+
+    internal static bool IsGameLiveStreamingInitialized
+    {
+        get
+        {
+            lock (ServiceLifetimeGate)
+            {
+                return GameLiveStreamingInitialized;
+            }
+        }
+    }
+
+    internal static bool IsSharePlayInitialized
+    {
+        get
+        {
+            lock (ServiceLifetimeGate)
+            {
+                return SharePlayInitialized;
+            }
+        }
+    }
+
+    internal static void ResetServiceLifetimeForTests()
+    {
+        lock (ServiceLifetimeGate)
+        {
+            GameLiveStreamingInitialized = false;
+            SharePlayInitialized = false;
+        }
+    }
+
     [SysAbiExport(Nid = "kvYEw2lBndk", ExportName = "sceGameLiveStreamingInitialize",
         Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceGameLiveStreaming")]
-    public static int GameLiveStreamingInitialize(CpuContext ctx) => Ok(ctx);
+    public static int GameLiveStreamingInitialize(CpuContext ctx)
+    {
+        // Initialize is the boot gate and always succeeds; re-init is fine.
+        lock (ServiceLifetimeGate)
+        {
+            GameLiveStreamingInitialized = true;
+        }
+
+        return Ok(ctx);
+    }
 
     [SysAbiExport(Nid = "9yK6Fk8mKOQ", ExportName = "sceGameLiveStreamingTerminate",
         Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceGameLiveStreaming")]
-    public static int GameLiveStreamingTerminate(CpuContext ctx) => Ok(ctx);
+    public static int GameLiveStreamingTerminate(CpuContext ctx)
+    {
+        lock (ServiceLifetimeGate)
+        {
+            if (!GameLiveStreamingInitialized)
+            {
+                return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
+            }
+
+            GameLiveStreamingInitialized = false;
+        }
+
+        return Ok(ctx);
+    }
 
     [SysAbiExport(Nid = "isruqthpYcw", ExportName = "sceSharePlayInitialize",
         Target = Generation.Gen4 | Generation.Gen5, LibraryName = "libSceSharePlay")]
-    public static int SharePlayInitialize(CpuContext ctx) => Ok(ctx);
+    public static int SharePlayInitialize(CpuContext ctx)
+    {
+        // Initialize is the boot gate and always succeeds; re-init is fine.
+        lock (ServiceLifetimeGate)
+        {
+            SharePlayInitialized = true;
+        }
+
+        return Ok(ctx);
+    }
 
     [SysAbiExport(Nid = "0IL1keINExQ", ExportName = "sceShareTerminate",
         Target = Generation.Gen5, LibraryName = "libSceShareUtility")]
