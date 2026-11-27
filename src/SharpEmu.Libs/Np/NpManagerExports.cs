@@ -115,8 +115,11 @@ public static partial class NpManagerExports
         LibraryName = "libSceNpManager")]
     public static int NpCheckCallbackForLib(CpuContext ctx) => DispatchStateCallbacks(ctx, "sceNpCheckCallbackForLib");
 
-    // Offline profile: the online id payload is left untouched and the call
-    // reports success, matching the other offline NpManager stubs here.
+    // Offline profile: the online-id payload is left untouched and the call
+    // reports SIGNED_OUT on every generation. shadPS4 returns SIGNED_OUT
+    // without writing the output when PSN is unavailable (np_manager.cpp:618-636).
+    // The value-returning queries below (GetState/HasSignedUp/GetNpReachabilityState)
+    // correctly differ by returning data + OK (np_manager.cpp:641-678, 726-746).
     [SysAbiExport(
         Nid = "XDncXQIJUSk",
         ExportName = "sceNpGetOnlineId",
@@ -124,8 +127,12 @@ public static partial class NpManagerExports
         LibraryName = "libSceNpManager")]
     public static int NpGetOnlineId(CpuContext ctx)
     {
-        // Gen5 ABI: user ID, then output structure.
-        return WriteOfflineOnlineId(ctx, ctx[CpuRegister.Rsi]);
+        if (unchecked((int)ctx[CpuRegister.Rdi]) == -1 || ctx[CpuRegister.Rsi] == 0)
+        {
+            return SetReturn(ctx, NpErrorInvalidArgument);
+        }
+
+        return SetReturn(ctx, NpErrorSignedOut);
     }
 
     [SysAbiExport(
@@ -241,6 +248,9 @@ public static partial class NpManagerExports
             return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
         }
 
+        // 1 == OrbisNpState::SignedOut (np_manager.h:22-26: NotSignedUp = 0,
+        // SignedOut = 1, SignedIn = 2); sceNpGetState reports SignedOut while
+        // offline (np_manager.cpp:657-678).
         Span<byte> stateBytes = stackalloc byte[sizeof(uint)];
         BinaryPrimitives.WriteUInt32LittleEndian(stateBytes, 1);
         return ctx.Memory.TryWrite(stateAddress, stateBytes)
@@ -262,16 +272,17 @@ public static partial class NpManagerExports
             return SetReturn(ctx, NpErrorInvalidArgument);
         }
 
-        // The offline profile exposed by sceNpGetState is signed in. Keep the
-        // account query consistent with that state: Unity's PSN integration
-        // treats SIGNED_OUT as an exceptional state and retries it every frame.
-        // A stable local-only id is sufficient for titles which only use the
-        // value as a profile key.
-        Span<byte> accountId = stackalloc byte[sizeof(ulong)];
-        BinaryPrimitives.WriteUInt64LittleEndian(accountId, 1);
-        return ctx.Memory.TryWrite(accountIdAddress, accountId)
-            ? SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_OK)
-            : SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        // Offline profile: sceNpGetState reports SignedOut (1 == SignedOut per
+        // np_manager.h:22-26; np_manager.cpp:657-678), so PSN profile queries
+        // must agree instead of handing the guest a signed-in identity that can
+        // never be resolved online. The out-param is left untouched on error,
+        // matching the sibling queries. Value-returning queries (GetState,
+        // HasSignedUp, GetNpReachabilityState) correctly differ by returning
+        // data + OK (np_manager.cpp:641-678, 726-746).
+        // shadPS4 zeroes *account_id before returning SIGNED_OUT
+        // (np_manager.cpp:579-592), but the sibling SharpEmu queries leave
+        // buffers untouched on error, so this keeps the single offline idiom.
+        return SetReturn(ctx, NpErrorSignedOut);
     }
 
     [SysAbiExport(
@@ -288,14 +299,9 @@ public static partial class NpManagerExports
             return SetReturn(ctx, NpErrorInvalidArgument);
         }
 
-        Span<byte> country = stackalloc byte[4];
-        country[0] = (byte)'U';
-        country[1] = (byte)'S';
-        country[2] = 0;
-        country[3] = 0;
-        return ctx.Memory.TryWrite(countryAddress, country)
-            ? SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_OK)
-            : SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
+        // Offline: SIGNED_OUT without writing the output (np_manager.cpp:487-501).
+        // Left untouched to match the sibling queries; see NpGetAccountIdA.
+        return SetReturn(ctx, NpErrorSignedOut);
     }
 
     [SysAbiExport(
@@ -313,7 +319,10 @@ public static partial class NpManagerExports
         }
 
         Span<byte> state = stackalloc byte[sizeof(uint)];
-        BinaryPrimitives.WriteUInt32LittleEndian(state, 0); // Unavailable while offline.
+        // 0 == OrbisNpReachabilityState::Unavailable (np_manager.h:28-32);
+        // offline reports Unavailable + OK (np_manager.cpp:641-655), unlike the
+        // SIGNED_OUT profile queries above.
+        BinaryPrimitives.WriteUInt32LittleEndian(state, 0);
         return ctx.Memory.TryWrite(stateAddress, state)
             ? SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_OK)
             : SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
@@ -333,7 +342,9 @@ public static partial class NpManagerExports
         }
 
         Span<byte> signedUp = stackalloc byte[1];
-        signedUp[0] = 0; // No online account is configured in the offline profile.
+        // Offline has no signed-up account: report false + OK
+        // (np_manager.cpp:726-746), unlike the SIGNED_OUT profile queries above.
+        signedUp[0] = 0;
         return ctx.Memory.TryWrite(resultAddress, signedUp)
             ? SetReturn(ctx, 0)
             : SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
@@ -491,6 +502,7 @@ public static partial class NpManagerExports
 
         return SetReturn(ctx, (int)OrbisGen2Result.ORBIS_GEN2_OK);
     }
+
     private static void TraceNp(string message)
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("SHARPEMU_LOG_NP"), "1", StringComparison.Ordinal))
@@ -499,19 +511,5 @@ public static partial class NpManagerExports
         }
 
         Console.Error.WriteLine($"[LOADER][TRACE] np.{message}");
-    }
-    private static int WriteOfflineOnlineId(CpuContext ctx, ulong address)
-    {
-        if (address == 0)
-        {
-            return ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_INVALID_ARGUMENT);
-        }
-
-        // SceNpOnlineId is a 16-byte handle plus four trailing bytes.
-        Span<byte> onlineId = stackalloc byte[20];
-        "Player"u8.CopyTo(onlineId);
-        return ctx.Memory.TryWrite(address, onlineId)
-            ? ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_OK)
-            : ctx.SetReturn(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT);
     }
 }

@@ -76,24 +76,41 @@ public sealed class GnmMovieExportsTests
     }
 
     [Fact]
-    public void NpIdUsesTheExistingOnlineIdAndClearsTheEntirePs4Payload()
+    public void NpGetOnlineIdLeavesOutputUntouchedWhenSignedOut()
     {
+        // Offline profiles report SIGNED_OUT without fabricating an online id,
+        // so the output buffer must be left untouched on the error path.
+        var memory = new FakeCpuMemory(Base, 0x1000);
+        var context = new CpuContext(memory, Generation.Gen4);
+        var output = Base + 0x200;
+        var sentinel = Enumerable.Repeat((byte)0xAB, 20).ToArray();
+        Assert.True(memory.TryWrite(output, sentinel));
+        context[CpuRegister.Rdi] = 0x10000000;
+        context[CpuRegister.Rsi] = output;
+        Assert.Equal(unchecked((int)0x80550006), NpManagerExports.NpGetOnlineId(context));
+        Assert.Equal(unchecked((ulong)unchecked((int)0x80550006)), context[CpuRegister.Rax]);
+        var actual = new byte[20];
+        Assert.True(memory.TryRead(output, actual));
+        Assert.Equal(sentinel, actual);
+    }
+
+    [Fact]
+    public void GnmGetNpIdReportsSignedOutViaSharedOnlineIdQuery()
+    {
+        // GnmNpManagerExports.GetNpId delegates to NpManagerExports.NpGetOnlineId,
+        // which reports SIGNED_OUT without writing its output when offline.
+        // The Gnm wrapper still clears its own 36-byte payload first.
         var memory = new FakeCpuMemory(Base, 0x1000);
         var context = new CpuContext(memory, Generation.Gen4);
         var address = Base + 0x100;
-        var expected = Enumerable.Repeat((byte)0xAB, 38).ToArray();
-        Assert.True(memory.TryWrite(address - 1, expected));
+        Assert.True(memory.TryWrite(address, Enumerable.Repeat((byte)0xAB, 36).ToArray()));
         context[CpuRegister.Rdi] = 0x10000000;
         context[CpuRegister.Rsi] = address;
-        Assert.Equal(0, GnmNpManagerExports.GetNpId(context));
-        expected.AsSpan(1, 36).Clear();
-        context[CpuRegister.Rsi] = Base + 0x200;
-        Assert.Equal(0, NpManagerExports.NpGetOnlineId(context));
-        Assert.True(memory.TryRead(Base + 0x200, expected.AsSpan(1, 20)));
-        var actual = new byte[38];
-        Assert.True(memory.TryRead(address - 1, actual));
-        Assert.Equal(expected, actual);
-        Assert.Equal(0UL, context[CpuRegister.Rax]);
+        Assert.Equal(unchecked((int)0x80550006), GnmNpManagerExports.GetNpId(context));
+        Assert.Equal(unchecked((ulong)unchecked((int)0x80550006)), context[CpuRegister.Rax]);
+        Span<byte> actual = stackalloc byte[36];
+        Assert.True(memory.TryRead(address, actual));
+        Assert.All(actual.ToArray(), b => Assert.Equal(0, b));
     }
 
     [Theory]

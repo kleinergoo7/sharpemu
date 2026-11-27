@@ -110,4 +110,97 @@ public sealed class NpManagerExportsTests
         ctx[CpuRegister.Rdi] = 0;
         Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpCheckNpReachability(ctx));
     }
+
+    [Theory]
+    [InlineData(Generation.Gen4)]
+    [InlineData(Generation.Gen5)]
+    public void ProfileQueries_ReportSignedOutAndLeaveBuffersUntouched(Generation generation)
+    {
+        var memory = new FakeCpuMemory(MemoryBase, 0x1000);
+        var ctx = new CpuContext(memory, generation);
+        ctx[CpuRegister.Rdi] = 0x10000000;
+
+        // shadPS4 returns SIGNED_OUT without writing the output when PSN is
+        // unavailable (np_manager.cpp:618-636 for GetOnlineId, 579-592 for
+        // GetAccountIdA, 487-501 for GetAccountCountryA); the buffer keeps
+        // whatever the guest left there.
+        var accountIdAddress = MemoryBase + 0x100;
+        Assert.True(memory.TryWrite(accountIdAddress, Enumerable.Repeat((byte)0xCC, 8).ToArray()));
+        ctx[CpuRegister.Rsi] = accountIdAddress;
+        Assert.Equal(unchecked((int)0x80550006), NpManagerExports.NpGetAccountIdA(ctx));
+        Span<byte> accountId = stackalloc byte[8];
+        Assert.True(memory.TryRead(accountIdAddress, accountId));
+        Assert.All(accountId.ToArray(), b => Assert.Equal(0xCC, b));
+
+        var onlineIdAddress = MemoryBase + 0x200;
+        Assert.True(memory.TryWrite(onlineIdAddress, Enumerable.Repeat((byte)0xCC, 20).ToArray()));
+        ctx[CpuRegister.Rsi] = onlineIdAddress;
+        Assert.Equal(unchecked((int)0x80550006), NpManagerExports.NpGetOnlineId(ctx));
+        Span<byte> onlineId = stackalloc byte[20];
+        Assert.True(memory.TryRead(onlineIdAddress, onlineId));
+        Assert.All(onlineId.ToArray(), b => Assert.Equal(0xCC, b));
+
+        var countryAddress = MemoryBase + 0x300;
+        Assert.True(memory.TryWrite(countryAddress, Enumerable.Repeat((byte)0xCC, 4).ToArray()));
+        ctx[CpuRegister.Rsi] = countryAddress;
+        Assert.Equal(unchecked((int)0x80550006), NpManagerExports.NpGetAccountCountryA(ctx));
+        Span<byte> country = stackalloc byte[4];
+        Assert.True(memory.TryRead(countryAddress, country));
+        Assert.All(country.ToArray(), b => Assert.Equal(0xCC, b));
+    }
+
+    [Theory]
+    [InlineData(Generation.Gen4)]
+    [InlineData(Generation.Gen5)]
+    public void ProfileQueries_RejectInvalidArguments(Generation generation)
+    {
+        var ctx = new CpuContext(new FakeCpuMemory(MemoryBase, 0x1000), generation);
+        ctx[CpuRegister.Rdi] = unchecked((ulong)0xFFFFFFFF);
+        ctx[CpuRegister.Rsi] = MemoryBase + 0x100;
+        Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpGetAccountIdA(ctx));
+        Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpGetOnlineId(ctx));
+        Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpGetAccountCountryA(ctx));
+
+        ctx[CpuRegister.Rdi] = 0x10000000;
+        ctx[CpuRegister.Rsi] = 0;
+        Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpGetAccountIdA(ctx));
+        Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpGetOnlineId(ctx));
+        Assert.Equal(unchecked((int)0x80550003), NpManagerExports.NpGetAccountCountryA(ctx));
+    }
+
+    [Theory]
+    [InlineData(Generation.Gen4)]
+    [InlineData(Generation.Gen5)]
+    public void ValueQueries_ReturnDataWhileOffline(Generation generation)
+    {
+        // GetState reports SignedOut (1 == SignedOut per np_manager.h:22-26;
+        // np_manager.cpp:657-678), HasSignedUp reports false
+        // (np_manager.cpp:726-746), and GetNpReachabilityState reports
+        // Unavailable (0 per np_manager.h:28-32; np_manager.cpp:641-655):
+        // data + OK, unlike the SIGNED_OUT profile queries above.
+        var memory = new FakeCpuMemory(MemoryBase, 0x1000);
+        var ctx = new CpuContext(memory, generation);
+        ctx[CpuRegister.Rdi] = 0x10000000;
+
+        var stateAddress = MemoryBase + 0x100;
+        ctx[CpuRegister.Rsi] = stateAddress;
+        Assert.Equal(0, NpManagerExports.NpGetState(ctx));
+        Span<byte> state = stackalloc byte[4];
+        Assert.True(memory.TryRead(stateAddress, state));
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(state));
+
+        var signedUpAddress = MemoryBase + 0x200;
+        ctx[CpuRegister.Rsi] = signedUpAddress;
+        Assert.Equal(0, NpManagerExports.NpHasSignedUp(ctx));
+        Span<byte> signedUp = stackalloc byte[1];
+        Assert.True(memory.TryRead(signedUpAddress, signedUp));
+        Assert.Equal(0, signedUp[0]);
+
+        var reachabilityAddress = MemoryBase + 0x300;
+        ctx[CpuRegister.Rsi] = reachabilityAddress;
+        Assert.Equal(0, NpManagerExports.NpGetNpReachabilityState(ctx));
+        Span<byte> reachability = stackalloc byte[4];
+        Assert.True(memory.TryRead(reachabilityAddress, reachability));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(reachability));
+    }
 }
