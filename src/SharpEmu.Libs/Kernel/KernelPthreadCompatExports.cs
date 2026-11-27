@@ -80,6 +80,7 @@ public static class KernelPthreadCompatExports
         public int QueuedWaiterCount => Volatile.Read(ref _queuedWaiterCount);
         public int Type { get; set; } = MutexTypeErrorCheck;
         public int Protocol { get; set; }
+        public int ProcessShared { get; set; }
         public LinkedList<PthreadMutexWaiter> Waiters { get; } = new();
 
         public bool TryAcquireUncontended(ulong threadId, bool allowWaiterBarge)
@@ -469,6 +470,14 @@ public static class KernelPthreadCompatExports
         LibraryName = "libKernel")]
     public static int PosixPthreadMutexattrSetpshared(CpuContext ctx)
         => PthreadMutexattrSetpsharedCore(ctx, ctx[CpuRegister.Rdi], unchecked((int)ctx[CpuRegister.Rsi]));
+
+    [SysAbiExport(
+        Nid = "PmL-TwKUzXI",
+        ExportName = "pthread_mutexattr_getpshared",
+        Target = Generation.Gen4 | Generation.Gen5,
+        LibraryName = "libKernel")]
+    public static int PosixPthreadMutexattrGetpshared(CpuContext ctx)
+        => PthreadMutexattrGetpsharedCore(ctx, ctx[CpuRegister.Rdi], ctx[CpuRegister.Rsi]);
 
     [SysAbiExport(
         Nid = "dQHWEsJtoE4",
@@ -872,6 +881,7 @@ public static class KernelPthreadCompatExports
         {
             Type = attr.Type,
             Protocol = attr.Protocol,
+            ProcessShared = attr.ProcessShared,
         };
 
         if (!TryAllocateOpaqueObject(ctx, MutexObjectSize, out var handle))
@@ -1335,6 +1345,28 @@ public static class KernelPthreadCompatExports
         }
 
         return WriteMutexAttrObject(ctx, resolvedAddress, updatedState)
+            ? (int)OrbisGen2Result.ORBIS_GEN2_OK
+            : PosixBadAddress;
+    }
+
+    private static int PthreadMutexattrGetpsharedCore(CpuContext ctx, ulong attrAddress, ulong psharedAddress)
+    {
+        if (psharedAddress == 0)
+        {
+            return PosixInvalidArgument;
+        }
+
+        var resolvedAddress = ResolveMutexAttrHandle(ctx, attrAddress);
+        PthreadMutexAttrState state;
+        lock (_stateGate)
+        {
+            if (!_mutexAttrStates.TryGetValue(resolvedAddress, out state))
+            {
+                return PosixInvalidArgument;
+            }
+        }
+
+        return TryWriteUInt32(ctx, psharedAddress, unchecked((uint)state.ProcessShared))
             ? (int)OrbisGen2Result.ORBIS_GEN2_OK
             : PosixBadAddress;
     }

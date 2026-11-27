@@ -118,6 +118,27 @@ public sealed class PthreadMutexSemanticsTests
         Assert.NotEqual(0, KernelPthreadCompatExports.PosixPthreadMutexattrSetpshared(context));
         Assert.True(context.TryReadUInt32(handle + 8, out stored));
         Assert.Equal(1u, stored);
+
+        // getpshared round-trips the stored value.
+        const ulong psharedOutAddress = memoryBase + 0x200;
+        context[CpuRegister.Rdi] = attributeAddress;
+        context[CpuRegister.Rsi] = psharedOutAddress;
+        Assert.Equal(0, KernelPthreadCompatExports.PosixPthreadMutexattrGetpshared(context));
+        Assert.True(context.TryReadUInt32(psharedOutAddress, out var pshared));
+        Assert.Equal(1u, pshared);
+
+        // A null destination is rejected without touching the attribute.
+        context[CpuRegister.Rsi] = 0;
+        Assert.NotEqual(0, KernelPthreadCompatExports.PosixPthreadMutexattrGetpshared(context));
+
+        // A mutex created from the attribute observes its pshared value.
+        const ulong mutexAddress = memoryBase + 0x300;
+        context[CpuRegister.Rdi] = mutexAddress;
+        context[CpuRegister.Rsi] = attributeAddress;
+        Assert.Equal(0, KernelPthreadCompatExports.PthreadMutexInit(context));
+        Assert.True(context.TryReadUInt64(mutexAddress, out var mutexHandle));
+        Assert.NotEqual(0UL, mutexHandle);
+        Assert.Equal(1, GetMutexProcessShared(mutexHandle));
     }
 
     [Theory]
@@ -500,6 +521,18 @@ public sealed class PthreadMutexSemanticsTests
             Assert.Equal(memoryFault, KernelPthreadCompatExports.PthreadMutexattrInit(context));
             Assert.Equal(0, memory.OutstandingAllocations);
         }
+    }
+
+    private static int GetMutexProcessShared(ulong handle)
+    {
+        var states = (System.Collections.IDictionary)typeof(KernelPthreadCompatExports)
+            .GetField("_mutexStates", BindingFlags.Static | BindingFlags.NonPublic)!
+            .GetValue(null)!;
+        var state = states[handle];
+        Assert.NotNull(state);
+        return (int)state.GetType()
+            .GetProperty("ProcessShared", BindingFlags.Public | BindingFlags.Instance)!
+            .GetValue(state)!;
     }
 
     internal sealed class AllocatingCpuMemory : ICpuMemory, IGuestMemoryAllocator
