@@ -6886,6 +6886,25 @@ public static partial class KernelMemoryCompatExports
         }
     }
 
+    // Whether the whole range lies inside one live libc heap allocation.
+    private static bool IsTrackedLibcRange(ulong address, ulong length)
+    {
+        lock (_libcAllocGate)
+        {
+            foreach (var (allocationAddress, allocation) in _libcAllocations)
+            {
+                var size = (ulong)allocation.Size;
+                if (address >= allocationAddress && address - allocationAddress <= size &&
+                    length <= size - (address - allocationAddress))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static bool IsHostRangeAccessible(ulong address, ulong length, bool writeAccess)
     {
         if (address == 0 || length == 0)
@@ -6902,6 +6921,16 @@ public static partial class KernelMemoryCompatExports
         if (ulong.MaxValue - address < length - 1)
         {
             return false;
+        }
+
+        // On POSIX, HostMemory.Query only knows regions created through
+        // HostMemory.Alloc. libc heap blocks come from Marshal.AllocHGlobal and
+        // are tracked here instead, so the VirtualQuery-style check below would
+        // report them as free. A live tracked block is known-writable host
+        // memory; trust it directly.
+        if (IsTrackedLibcRange(address, length))
+        {
+            return true;
         }
 
         var endAddress = address + length - 1;
