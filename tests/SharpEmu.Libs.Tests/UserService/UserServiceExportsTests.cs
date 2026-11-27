@@ -87,6 +87,73 @@ public sealed class UserServiceExportsTests
     }
 
     [Fact]
+    public void GetEventDeliversBootLoginToEachPollingThreadOnce()
+    {
+        const ulong address = 0x1_0000_0000;
+        var ctx = new CpuContext(new FakeCpuMemory(address, 0x100), Generation.Gen4);
+        Assert.Equal(0, UserServiceExports.UserServiceTerminate(ctx));
+        Assert.Equal(0, UserServiceExports.UserServiceInitialize(ctx));
+        ctx[CpuRegister.Rdi] = address;
+
+        var previous = GuestThreadExecution.EnterGuestThread(0xAAAA);
+        try
+        {
+            Assert.Equal(0, UserServiceExports.UserServiceGetEvent(ctx));
+            Assert.Equal(unchecked((int)0x80960007), UserServiceExports.UserServiceGetEvent(ctx));
+
+            GuestThreadExecution.RestoreGuestThread(0xBBBB);
+            Assert.Equal(0, UserServiceExports.UserServiceGetEvent(ctx));
+            Assert.Equal(unchecked((int)0x80960007), UserServiceExports.UserServiceGetEvent(ctx));
+        }
+        finally
+        {
+            GuestThreadExecution.RestoreGuestThread(previous);
+            UserServiceExports.UserServiceTerminate(ctx);
+        }
+    }
+
+    [Fact]
+    public void GetEventDeliversBootLoginConcurrentlyToSixteenPollingThreads()
+    {
+        const ulong address = 0x1_0000_0000;
+        const int threadCount = 16;
+        var setupCtx = new CpuContext(new FakeCpuMemory(address, 0x100), Generation.Gen4);
+        Assert.Equal(0, UserServiceExports.UserServiceTerminate(setupCtx));
+        Assert.Equal(0, UserServiceExports.UserServiceInitialize(setupCtx));
+
+        var firstResults = new int[threadCount];
+        var secondResults = new int[threadCount];
+        var tasks = new Task[threadCount];
+        for (var i = 0; i < threadCount; i++)
+        {
+            var index = i;
+            tasks[index] = Task.Run(() =>
+            {
+                var handle = 0xC000UL + (ulong)index;
+                var previous = GuestThreadExecution.EnterGuestThread(handle);
+                try
+                {
+                    var ctx = new CpuContext(new FakeCpuMemory(address, 0x100), Generation.Gen4);
+                    ctx[CpuRegister.Rdi] = address;
+                    firstResults[index] = UserServiceExports.UserServiceGetEvent(ctx);
+                    secondResults[index] = UserServiceExports.UserServiceGetEvent(ctx);
+                }
+                finally
+                {
+                    GuestThreadExecution.RestoreGuestThread(previous);
+                }
+            });
+        }
+
+        Task.WaitAll(tasks);
+
+        Assert.All(firstResults, r => Assert.Equal(0, r));
+        Assert.All(secondResults, r => Assert.Equal(unchecked((int)0x80960007), r));
+
+        Assert.Equal(0, UserServiceExports.UserServiceTerminate(setupCtx));
+    }
+
+    [Fact]
     public void TerminateResetsTheLoginEvent()
     {
         const ulong address = 0x1_0000_0000;

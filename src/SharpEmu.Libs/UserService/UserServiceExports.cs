@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using SharpEmu.HLE;
+using SharpEmu.Libs.Np;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Threading;
 
@@ -20,6 +22,13 @@ public static class UserServiceExports
     private const int PrimaryUserId = 0x10000000;
     private const int InvalidUserId = -1;
     private const string PrimaryUserName = "SharpEmu";
+    // The synthetic boot login is consumed from several guest threads during a
+    // title's startup. Deliver it once per polling thread so a late poller does
+    // not build a user from an empty payload. The keyed set is naturally bounded
+    // by live guest polling threads: each thread handle is inserted at most once
+    // via TryAdd, so no arbitrary cap is needed and a tight queue drain terminates
+    // once every live poller has consumed its copy.
+    private static readonly ConcurrentDictionary<ulong, byte> LoginObservers = new();
     private static int _loginEventDelivered;
 
     [SysAbiExport(
@@ -42,6 +51,7 @@ public static class UserServiceExports
     public static int UserServiceTerminate(CpuContext ctx)
     {
         Interlocked.Exchange(ref _loginEventDelivered, 0);
+        LoginObservers.Clear();
         return SetReturnWithTrace(ctx, 0, "terminate");
     }
 
@@ -103,7 +113,10 @@ public static class UserServiceExports
             return SetReturn(ctx, OrbisUserServiceErrorInvalidArgument);
         }
 
-        if (Interlocked.Exchange(ref _loginEventDelivered, 1) != 0)
+        var observer = GuestThreadExecution.CurrentGuestThreadHandle;
+        // Atomic exactly-once per polling thread: TryAdd fails only when this
+        // thread already consumed its copy.
+        if (!LoginObservers.TryAdd(observer, 0))
         {
             return SetReturn(ctx, OrbisUserServiceErrorNoEvent);
         }
@@ -111,6 +124,10 @@ public static class UserServiceExports
         Span<byte> payload = stackalloc byte[sizeof(int) * 2];
         BinaryPrimitives.WriteInt32LittleEndian(payload[0..], 0);
         BinaryPrimitives.WriteInt32LittleEndian(payload[sizeof(int)..], PrimaryUserId);
+        if (Interlocked.Exchange(ref _loginEventDelivered, 1) == 0)
+        {
+            NpStateCallbackState.QueueState(PrimaryUserId, NpStateCallbackState.StateSignedOut);
+        }
         return ctx.Memory.TryWrite(eventAddress, payload)
             ? SetReturnWithTrace(
                 ctx,
