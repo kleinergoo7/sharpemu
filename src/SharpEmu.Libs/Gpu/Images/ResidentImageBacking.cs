@@ -31,17 +31,33 @@ internal static class ResidentImageBacking
     // backing: the guest renders into it and the display reads it on the GPU
     // side. When the first flip happens before any render, there are no guest
     // bytes to upload, so present a cleared frame instead of treating the
-    // entire range as a fatal read error. Ranges with a backed first byte keep
-    // the strict checks below (a hole inside a resident image is still fatal).
+    // entire range as a fatal read error. Only a range with no backed byte at
+    // all is zero-filled; a range with any backed byte keeps the strict read
+    // below (a hole inside a resident image is still fatal).
     internal static bool TryReadOrZeroIfUnbacked(IGuestBackedSpace backing, ulong address, Span<byte> destination) =>
         TryRead(backing, address, destination) ||
         ZeroIfUnbacked(backing, address, destination);
 
     private static bool ZeroIfUnbacked(IGuestBackedSpace backing, ulong address, Span<byte> destination)
     {
-        if (backing.IsBackedRange(address, 1))
+        var size = (ulong)destination.Length;
+        if (size == 0)
         {
             return false;
+        }
+
+        // Zero-fill only when no byte of the range is backed. A range with an
+        // unbacked head but a backed tail still holds real bytes, so it must
+        // fall through to the fatal read instead of being silently cleared.
+        for (ulong offset = 0; offset < size;)
+        {
+            var chunk = Math.Min(Page - ((address + offset) & (Page - 1)), size - offset);
+            if (backing.IsBackedRange(address + offset, chunk))
+            {
+                return false;
+            }
+
+            offset += chunk;
         }
 
         destination.Clear();

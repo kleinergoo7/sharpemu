@@ -108,6 +108,30 @@ public sealed class ResidentImageBackingTests
     }
 
     [Fact]
+    public void ZeroIfUnbackedClearsARangeWithNoBackedByte()
+    {
+        var backing = new PrefixBacking(Base);
+        var bytes = new byte[2 * Page];
+        Array.Fill(bytes, (byte)0xFF);
+
+        Assert.True(ResidentImageBacking.TryReadOrZeroIfUnbacked(backing, Base, bytes));
+        Assert.All(bytes, value => Assert.Equal(0, value));
+    }
+
+    [Fact]
+    public void ZeroIfUnbackedRefusesAnUnbackedHeadWithABackedTail()
+    {
+        // A backed tail holds real bytes, so the range must fall through to
+        // the fatal read instead of being silently cleared.
+        var backing = new PrefixBacking(Base, (1, 1));
+        var bytes = new byte[2 * Page];
+        Array.Fill(bytes, (byte)0xFF);
+
+        Assert.False(ResidentImageBacking.TryReadOrZeroIfUnbacked(backing, Base, bytes));
+        Assert.All(bytes, value => Assert.Equal(0xFF, value));
+    }
+
+    [Fact]
     public void TheTailIsZeroedWhenTheRangeStartsMidPage()
     {
         var backing = new PrefixBacking(Base, (0, 2));
