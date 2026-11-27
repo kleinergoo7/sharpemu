@@ -662,6 +662,8 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
         IReadOnlyDictionary<ulong, string> activeImportStubs,
         IReadOnlyDictionary<string, ulong> activeRuntimeSymbols)
     {
+        OrbisGen2Result? initFailure = null;
+
         for (var i = 0; i < loadedModuleImages.Count; i++)
         {
             var loadedModule = loadedModuleImages[i];
@@ -702,17 +704,25 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
                 result == OrbisGen2Result.ORBIS_GEN2_OK);
             if (result != OrbisGen2Result.ORBIS_GEN2_OK)
             {
-                Console.Error.WriteLine(
-                    $"[RUNTIME] Module start failed: {moduleName} -> {result}");
                 // PS4 module entry points may return a non-zero value that is not
                 // an OrbisGen2Result (for example, EAWebKit's loader stub returns 1).
                 // The guest decides how to interpret it via sceKernelLoadStartModule;
-                // an eagerly preloaded module has no such caller here.
-                continue;
+                // an eagerly preloaded module has no such caller here. Tolerate only
+                // that known benign stub value; any other failure aborts preload.
+                if (result == (OrbisGen2Result)1)
+                {
+                    Console.Error.WriteLine(
+                        $"[RUNTIME] Module start tolerated stub result: {moduleName} -> {result}");
+                    continue;
+                }
+
+                Console.Error.WriteLine(
+                    $"[RUNTIME] Module start failed: {moduleName} -> {result}");
+                initFailure ??= result;
             }
         }
 
-        return null;
+        return initFailure;
     }
 
     private OrbisGen2Result? RunImageInitializers(
