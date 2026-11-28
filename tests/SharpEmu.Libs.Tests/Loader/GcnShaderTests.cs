@@ -369,6 +369,56 @@ public sealed class GcnShaderTests
     }
 
     [Fact]
+    public void PlainLinearTileZeroStoreNormalizesInsteadOfThrowing()
+    {
+        // 2D-array store on the plain-linear tile with no detile flag: the
+        // most basic row-major layout needs no detile, so it rides the same
+        // typed-buffer tail as tiles 8/31 instead of throwing.
+        uint[] projection = [0x10, 0x20, 0x30, 0xF40DA002];
+        var normalized = GcnStorageImageLowering.NormalizeProjection(projection);
+        Assert.Equal(new uint[] { 0x10u, 0x20u, 0x30u, 0x7FACu }, normalized);
+        Assert.Equal(new uint[] { 0x10u, 0x20u, 0x30u, 0xF40DA002u }, projection);
+        // The buffer-descriptor entry point dispatches on the same marker words.
+        Assert.Equal(normalized, GcnBufferDescriptor.Normalize(projection));
+    }
+
+    [Fact]
+    public void PlainLinearTileZeroLoadStillReturnsZeroTexels()
+    {
+        // Tile-0 loads stay on the warned-zero path (TryLower's native-image
+        // fallback does not serve tile 0), so only the store widened.
+        var result = GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xF009A002]);
+        Assert.Equal(new uint[] { 0u, 0u, 0u, 0x38FACu }, result);
+    }
+
+    [Fact]
+    public void PlainLinearTileZeroStoreWithDetileFlagStillRejects()
+    {
+        // A tile-0 detile flag is not plain-linear addressing anymore: stores
+        // still throw like the other unsupported detile shapes.
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xFC0DA002]));
+        Assert.Contains("Unsupported GCN storage-image store", exception.Message);
+    }
+
+    [Fact]
+    public void PlainLinearTileZeroLoadWithDetileFlagStillReturnsZeroTexels()
+    {
+        // The same detile flag on a load keeps the warned-zero path.
+        var result = GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xF809A002]);
+        Assert.Equal(new uint[] { 0u, 0u, 0u, 0x38FACu }, result);
+    }
+
+    [Fact]
+    public void PlainLinearTileZeroStoreWithLargeNumberStillRejects()
+    {
+        // The post-gate number check still applies to tile 0.
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xF40DA202]));
+        Assert.Contains("Unsupported GCN storage-image store", exception.Message);
+    }
+
+    [Fact]
     public void LoweredBufferFetchRetainsTheRuntimeSplitFormatEncoding()
     {
         var original = Decode(0xE00C0000, 0x80010400, 0xBF810000);

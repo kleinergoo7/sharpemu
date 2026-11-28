@@ -37,6 +37,13 @@ public static class GcnStorageImageLowering
         // mip-only detile flag on a linear tile rides the same typed-buffer
         // path instead of faulting the whole shader. ATC and Neo-compressed
         // layouts still need a physical pass that does not exist here.
+        // Tile 0 is plain linear: only tiles 13/19 are microtiled, so with no
+        // detile flag its stores ride the same typed-buffer tail as tiles 8/31
+        // (Expand's tile-13/19 adjustments stay inert). Loads stay on the
+        // warned-zero path: TryLower routes tile-0 loads to the native-image
+        // fallback (CompareNativeTile), whose descriptor lowering does not
+        // serve tile 0 yet, so normalized load words would be dead. A tile-0
+        // detile flag still takes the loud unsupported path below.
         var mipmappedLinearStore = detileNeeded && (layout & (1u << 26)) != 0 && tile is 8 or 31 &&
             (layout & (1u << 10)) != 0 && (layout & ((1u << 11) | (1u << 12))) == 0;
         if (tile is NativeTile or NativeDisplayTile)
@@ -44,7 +51,8 @@ public static class GcnStorageImageLowering
         if (tile == 0 && format == 4 && number == 7 && (layout & (1u << 26)) == 0 &&
             GcnImageDescriptor.IsGpuDepthAddress(words[0] | ((ulong)(words[1] & 0xFF) << 32)))
             return EmptyProjection();
-        if (type is not (8 or 9 or 10 or 11 or 12 or 13) || tile is not (8 or 13 or 19 or 31) ||
+        if (type is not (8 or 9 or 10 or 11 or 12 or 13) || tile is not (0 or 8 or 13 or 19 or 31) ||
+            (tile == 0 && (layout & (1u << 26)) == 0) ||
             format is < 1 or > 14 or 13 || (tile == 19 && type != 10) || (detileNeeded && !mipmappedLinearStore))
             return UnsupportedProjection(layout, type, tile, format, number);
         if (mipmappedLinearStore && WarnedMipmappedLinearStores.TryAdd(layout, 0))
