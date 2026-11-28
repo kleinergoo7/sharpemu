@@ -513,4 +513,40 @@ public sealed class RegisterWriteTableTests
         Assert.Contains("outside its range", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, TextureGradientControl, 1, 2)).Message);
         Assert.Contains("one value", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, VgtPrimitiveType, 1, 2)).Message);
     }
+
+    [Fact]
+    public void UserConfigWriters_TextureGradientFactorsIsAnIgnoredSkip()
+    {
+        var banks = NewBanks();
+        var previousError = Console.Error;
+        using var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            Console.SetError(output);
+
+            // 0x382 is TEXTURE_GRADIENT_FACTORS: ignored on both the packet and table paths.
+            Assert.Equal(1u, WriteUserConfig(banks, TextureGradientFactors, 0x40000040));
+            Assert.Equal(3u, WriteUserConfig(banks, TextureGradientFactors, 0x11, 0x22, 0x33));
+            RegisterWriteTable.WriteUserConfigEntry(banks, TextureGradientFactors, 0x40000040, PacketAddress);
+
+            // 0x383 carries the same value in the versioned Kyty tables: accept loudly too.
+            Assert.Equal(1u, WriteUserConfig(banks, TextureGradientFactorsAlt, 0x40000040));
+            Assert.Equal(1u, WriteUserConfig(banks, TextureGradientControl, 0));
+
+            var report = output.ToString();
+            Assert.Contains("user_config_gradient_skip", report);
+            Assert.Contains("offset=0x0382", report);
+            Assert.Contains("offset=0x0383", report);
+            Assert.Contains("value=0x40000040", report);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        // Neighbors outside the ignored span stay fatal with the unsupported offset named.
+        Assert.Contains("unsupported=0x0385", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, 0x385, 1)).Message);
+        Assert.Contains("unsupported=0x037F", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, 0x37F, 1)).Message);
+        Assert.Contains("unsupported=0x0385", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, TextureGradientFactors, 1, 2, 3, 4)).Message);
+    }
 }

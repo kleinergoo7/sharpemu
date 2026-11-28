@@ -246,7 +246,12 @@ public static class UserConfigRegisterOffset
     public const uint GeUserVgprEn = 0x262;
     public const uint TaCsBcBaseAddr = 0x380;
     public const uint TaCsBcBaseAddrHi = 0x381;
-    public const uint TextureGradientFactors = 0x383;
+    // TEXTURE_GRADIENT_FACTORS is 0x382 per AgcPrimaryRegisterDefaults (Kyty MIT tables, default
+    // value 0x40000040); the versioned Kyty tables (Version8/10/11) list the same value at 0x383.
+    // Accept both loudly: the guest demonstrably writes 0x382, and 0x383 may carry the factors on
+    // other AGC versions. Neither value is modeled (sampler decode uses descriptor words only).
+    public const uint TextureGradientFactors = 0x382;
+    public const uint TextureGradientFactorsAlt = 0x383;
     public const uint TextureGradientControl = 0x384;
     public const uint GdsOaCntl = 0x41D;
     public const uint GdsOaCounter = 0x41E;

@@ -13,7 +13,6 @@ internal static partial class RegisterWriters
         direct[VgtPrimitiveType] = PrimitiveTypePacket;
         direct[VgtIndexType] = IndexTypePacket;
         direct[VgtObjectId] = ObjectIdPacket;
-        direct[TextureGradientFactors] = TextureGradientPacket;
         direct[TextureGradientControl] = TextureGradientPacket;
         direct[IaMultiVgtParam] = IgnoreValues;
         direct[GeMultiPrimIbResetEn] = PrimitiveResetControlPacket;
@@ -39,7 +38,8 @@ internal static partial class RegisterWriters
         indirect[VgtPrimitiveType] = PrimitiveTypeEntry;
         indirect[VgtIndexType] = IndexTypeEntry;
         indirect[VgtObjectId] = static (banks, _, value) => banks.UserConfig.ObjectId = value;
-        indirect[TextureGradientFactors] = IgnoreEntry;
+        indirect[TextureGradientFactors] = TextureGradientEntry;
+        indirect[TextureGradientFactorsAlt] = TextureGradientEntry;
         indirect[TextureGradientControl] = IgnoreEntry;
         indirect[IaMultiVgtParam] = IgnoreEntry;
         indirect[GeMultiPrimIbResetEn] = static (banks, _, value) => banks.UserConfig.PrimitiveResetControl = value;
@@ -85,6 +85,19 @@ internal static partial class RegisterWriters
         }
 
         return (uint)values.Length;
+    }
+
+    private static int _textureGradientSkipWarnings;
+
+    // TEXTURE_GRADIENT_FACTORS tunes texture-filter gradients the emulator does not model
+    // (sampler decode uses descriptor words only, so no bank state is touched). Ignore the value
+    // loudly, mirroring the context_table_skip precedent, so a real use stays visible.
+    private static void TextureGradientEntry(RegisterBanks banks, uint offset, uint value)
+    {
+        if (Interlocked.Increment(ref _textureGradientSkipWarnings) <= 16)
+        {
+            Console.Error.WriteLine($"[LOADER][WARN] command_stream.user_config_gradient_skip offset=0x{offset:X4} value=0x{value:X8}");
+        }
     }
 
     private static void PrimitiveTypeEntry(RegisterBanks banks, uint offset, uint value) =>
