@@ -180,6 +180,11 @@ public static class ShaderRegisterOffset
     // VertexStageRegisters and the writer, which stores nothing), so the
     // write is recorded loudly and ignored while the host GPU schedules CUs.
     public const uint SpiShaderPgmRsrc3Vs = 0x046;
+    // SH offset 0x47, between RSRC3_VS (SH 0x46 above) and PGM_LO_VS (SH 0x48
+    // below). Late-allocation tuning register: no bank field consumes it (see
+    // VertexStageRegisters and the writer, which stores nothing), so the
+    // write is recorded loudly and ignored while the host allocates on demand.
+    public const uint SpiShaderLateAllocVs = 0x047;
     public const uint SpiShaderPgmLoVs = 0x048;
     public const uint SpiShaderPgmHiVs = 0x049;
     public const uint SpiShaderPgmRsrc1Vs = 0x04A;

@@ -576,8 +576,40 @@ public sealed class RegisterWriteTableTests
 
         // Neighbors outside the ignored register stay fatal with the unsupported offset named.
         Assert.Contains("unsupported=0x0045", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x45, 1)).Message);
-        Assert.Contains("unsupported=0x0047", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x47, 1)).Message);
-        Assert.Contains("unsupported=0x0047", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, SpiShaderPgmRsrc3Vs, 1, 2)).Message);
+        Assert.Contains("unsupported=0x0045", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x45, 1, 2)).Message);
+    }
+
+    [Fact]
+    public void ShaderWriters_LateAllocVsIsAnIgnoredSkip()
+    {
+        var banks = NewBanks();
+        var previousError = Console.Error;
+        using var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            Console.SetError(output);
+
+            // 0x47 is SPI_SHADER_LATE_ALLOC_VS: ignored on both the packet and table paths.
+            Assert.Equal(1u, WriteShader(banks, SpiShaderLateAllocVs, 0x0000_0002));
+            RegisterWriteTable.WriteShaderEntry(banks, SpiShaderLateAllocVs, 0x0000_0002, PacketAddress);
+
+            var report = output.ToString();
+            Assert.Contains("shader_late_alloc_vs_skip", report);
+            Assert.Contains("offset=0x0047", report);
+            Assert.Contains("value=0x00000002", report);
+
+            // A span starting at the ignored register still stores the modeled neighbor.
+            Assert.Equal(2u, WriteShader(banks, SpiShaderLateAllocVs, 0x0000_0002, 0x2000));
+            Assert.Equal(0x2000ul << 8, banks.Shader.Vertex.LegacyVertexAddress);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        // 0x45 has no writer: a span from the unknown head across both ignored
+        // registers stays fatal with the unsupported offset named.
+        Assert.Contains("unsupported=0x0045", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x45, 1, 2, 3)).Message);
     }
 
     [Fact]

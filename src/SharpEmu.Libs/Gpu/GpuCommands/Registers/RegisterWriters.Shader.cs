@@ -85,15 +85,19 @@ internal static partial class RegisterWriters
         indirect[SpiShaderUserDataAddrHiHs] = static (banks, _, value) =>
             banks.Shader.Vertex.HullUserDataAddress = (banks.Shader.Vertex.HullUserDataAddress & uint.MaxValue) | ((ulong)(value & 0xFFFFu) << 32);
 
-        // SPI_SHADER_PGM_RSRC3_VS carries only CU occupancy tuning (CU_EN/WAVE_LIMIT);
+        // SPI_SHADER_PGM_RSRC3_VS carries only CU occupancy tuning;
         // the host GPU schedules compute units and no bank field consumes it.
         indirect[SpiShaderPgmRsrc3Vs] = ShaderRsrc3VsEntry;
 
-        // SPI_SHADER_PGM_RSRC3_ES carries only CU occupancy tuning (CU_EN/WAVE_LIMIT);
+        // SPI_SHADER_LATE_ALLOC_VS gates late VS allocation; the host
+        // allocates on demand and no bank field consumes it.
+        indirect[SpiShaderLateAllocVs] = ShaderLateAllocVsEntry;
+
+        // SPI_SHADER_PGM_RSRC3_ES carries only CU occupancy tuning;
         // the host GPU schedules compute units and no bank field consumes it.
         indirect[SpiShaderPgmRsrc3Es] = ShaderRsrc3EsEntry;
 
-        // SPI_SHADER_PGM_RSRC3_LS carries only CU occupancy tuning (CU_EN/WAVE_LIMIT);
+        // SPI_SHADER_PGM_RSRC3_LS carries only CU occupancy tuning;
         // the host GPU schedules compute units and no bank field consumes it.
         indirect[SpiShaderPgmRsrc3Ls] = ShaderRsrc3LsEntry;
 
@@ -284,7 +288,7 @@ internal static partial class RegisterWriters
 
     private static int _shaderRsrc3VsSkipWarnings;
 
-    // SPI_SHADER_PGM_RSRC3_VS tunes VS CU occupancy (CU_EN/WAVE_LIMIT) the emulator
+    // SPI_SHADER_PGM_RSRC3_VS tunes VS CU occupancy the emulator
     // does not model (the host GPU schedules compute units and no bank field consumes
     // it). Ignore the value loudly, mirroring the user-config gradient precedent, so a
     // real use stays visible.
@@ -296,9 +300,23 @@ internal static partial class RegisterWriters
         }
     }
 
+    private static int _shaderLateAllocVsSkipWarnings;
+
+    // SPI_SHADER_LATE_ALLOC_VS gates late VS allocation the emulator
+    // does not model (the host allocates on demand and no bank field consumes
+    // it). Ignore the value loudly, mirroring the occupancy-tuning precedent,
+    // so a real use stays visible.
+    private static void ShaderLateAllocVsEntry(RegisterBanks banks, uint offset, uint value)
+    {
+        if (Interlocked.Increment(ref _shaderLateAllocVsSkipWarnings) <= 16)
+        {
+            Console.Error.WriteLine($"[LOADER][WARN] command_stream.shader_late_alloc_vs_skip offset=0x{offset:X4} value=0x{value:X8}");
+        }
+    }
+
     private static int _shaderRsrc3EsSkipWarnings;
 
-    // SPI_SHADER_PGM_RSRC3_ES tunes ES CU occupancy (CU_EN/WAVE_LIMIT) the emulator
+    // SPI_SHADER_PGM_RSRC3_ES tunes ES CU occupancy the emulator
     // does not model (the host GPU schedules compute units and no bank field consumes
     // it). Ignore the value loudly, mirroring the VS occupancy-tuning precedent, so a
     // real use stays visible.
@@ -312,7 +330,7 @@ internal static partial class RegisterWriters
 
     private static int _shaderRsrc3LsSkipWarnings;
 
-    // SPI_SHADER_PGM_RSRC3_LS tunes LS CU occupancy (CU_EN/WAVE_LIMIT) the emulator
+    // SPI_SHADER_PGM_RSRC3_LS tunes LS CU occupancy the emulator
     // does not model (the host GPU schedules compute units and no bank field consumes
     // it). Ignore the value loudly, mirroring the ES occupancy-tuning precedent, so a
     // real use stays visible.
