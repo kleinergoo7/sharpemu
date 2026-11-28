@@ -311,6 +311,64 @@ public sealed class GcnShaderTests
     }
 
     [Fact]
+    public void MipmappedLinearStorageWriteNormalizesInsteadOfThrowing()
+    {
+        // 2D-array R11G11B10_FLOAT store on a linear-aligned tile whose detile flag
+        // carries only the mip-level reason bit.
+        uint[] projection = [0x10, 0x20, 0x30, 0xFC8DA5C6];
+        var normalized = GcnStorageImageLowering.NormalizeProjection(projection);
+        Assert.Equal(new uint[] { 0x10u, 0x20u, 0x30u, 0x24FACu }, normalized);
+        Assert.Equal(new uint[] { 0x10u, 0x20u, 0x30u, 0xFC8DA5C6u }, projection);
+        // The buffer-descriptor entry point dispatches on the same marker words.
+        Assert.Equal(normalized, GcnBufferDescriptor.Normalize(projection));
+    }
+
+    [Fact]
+    public void MipmappedLinearStorageLoadStillReturnsZeroTexels()
+    {
+        // The same detile flag without the store marker keeps the warned-zero path.
+        var result = GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xF88DA5C6]);
+        Assert.Equal(new uint[] { 0u, 0u, 0u, 0x38FACu }, result);
+    }
+
+    [Fact]
+    public void LinearStorageWriteWithoutDetileFlagKeepsExistingNormalization()
+    {
+        var result = GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xF48DA5C6]);
+        Assert.Equal(new uint[] { 0x10u, 0x20u, 0x30u, 0x24FACu }, result);
+    }
+
+    [Theory]
+    [InlineData(0xFC8DADC6)] // Mip + ATC reasons (bits 10+11).
+    [InlineData(0xFC8DB5C6)] // Mip + compressed reasons (bits 10+12).
+    [InlineData(0xFC8DA9C6)] // ATC reason (bit 11) instead of mip-only.
+    [InlineData(0xFC8DB1C6)] // Compressed reason (bit 12) instead of mip-only.
+    public void NonMipDetileReasonsStillRejectStorageWrites(uint layout)
+    {
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, layout]));
+        Assert.Contains("Unsupported GCN storage-image store", exception.Message);
+    }
+
+    [Fact]
+    public void MipmappedNonLinearStorageWriteStillRejects()
+    {
+        // Mip-only detile reason on a microtiled tile (13) still throws: only
+        // linear tiles (8/31) carry the lowered linear-mip addressing.
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xFCDDA5C6]));
+        Assert.Contains("Unsupported GCN storage-image store", exception.Message);
+    }
+
+    [Fact]
+    public void MipmappedLinearStorageWriteNormalizesDisplayLinearTile()
+    {
+        // The second allowed linear tile (31) normalizes like tile 8.
+        var result = GcnStorageImageLowering.NormalizeProjection([0x10, 0x20, 0x30, 0xFDFDA5C6]);
+        Assert.Equal(new uint[] { 0x10u, 0x20u, 0x30u, 0x24FACu }, result);
+    }
+
+    [Fact]
     public void LoweredBufferFetchRetainsTheRuntimeSplitFormatEncoding()
     {
         var original = Decode(0xE00C0000, 0x80010400, 0xBF810000);

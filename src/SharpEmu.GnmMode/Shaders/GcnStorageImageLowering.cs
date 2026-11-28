@@ -22,6 +22,7 @@ public static class GcnStorageImageLowering
     private static readonly uint[] PairScalars = [20, 22, 26];
     private static readonly uint[] SingleScalars = [8, 9, 10, 11, 12, 13, 16, 17, 19, 24, 25];
     private static readonly ConcurrentDictionary<uint, byte> UnsupportedImageLoads = new();
+    private static readonly ConcurrentDictionary<uint, byte> WarnedMipmappedLinearStores = new();
 
     public static uint[] NormalizeProjection(ReadOnlySpan<uint> words)
     {
@@ -30,14 +31,26 @@ public static class GcnStorageImageLowering
         var tile = (layout >> 20) & 31;
         var format = layout & 63;
         var number = (layout >> 6) & 15;
+        var detileNeeded = (layout & (1u << 27)) != 0;
+        // The lowering expands linear mip addresses itself (Expand accumulates
+        // each level's pitch offset into the typed-buffer base address, so a
+        // mip-only detile flag on a linear tile rides the same typed-buffer
+        // path instead of faulting the whole shader. ATC and Neo-compressed
+        // layouts still need a physical pass that does not exist here.
+        var mipmappedLinearStore = detileNeeded && (layout & (1u << 26)) != 0 && tile is 8 or 31 &&
+            (layout & (1u << 10)) != 0 && (layout & ((1u << 11) | (1u << 12))) == 0;
         if (tile is NativeTile or NativeDisplayTile)
             return EmptyProjection();
         if (tile == 0 && format == 4 && number == 7 && (layout & (1u << 26)) == 0 &&
             GcnImageDescriptor.IsGpuDepthAddress(words[0] | ((ulong)(words[1] & 0xFF) << 32)))
             return EmptyProjection();
         if (type is not (8 or 9 or 10 or 11 or 12 or 13) || tile is not (8 or 13 or 19 or 31) ||
-            format is < 1 or > 14 or 13 || (tile == 19 && type != 10) || (layout & (1u << 27)) != 0)
+            format is < 1 or > 14 or 13 || (tile == 19 && type != 10) || (detileNeeded && !mipmappedLinearStore))
             return UnsupportedProjection(layout, type, tile, format, number);
+        if (mipmappedLinearStore && WarnedMipmappedLinearStores.TryAdd(layout, 0))
+            Console.Error.WriteLine($"[GNMMODE][WARN] GCN storage-image mip store uses the linear typed-buffer path: " +
+                $"type={type} tile={tile} format={format} number={number} flags=0x{layout:X8}; " +
+                $"ATC/compressed stores remain unsupported.");
         // sRGB decoding belongs to reads. Storage writes use the normalized backing format.
         if (number == 9 && (layout & (1u << 26)) != 0 && format is 1 or 10)
             number = 0;
