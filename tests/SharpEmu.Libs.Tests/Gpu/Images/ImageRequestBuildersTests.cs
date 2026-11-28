@@ -716,6 +716,109 @@ public sealed class ImageRequestBuildersTests : IClassFixture<HeadlessVulkanFixt
     }
 
     [Fact]
+    public void DepthTarget_StencilFormatWithoutBoundMemoryBuildsDepthOnly()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var fatal = new FatalScope();
+        // The format bit can stay stale on a depth-only draw: no stencil surface is bound and no stencil
+        // operation is enabled, so the attachment drops the stencil aspect instead of faulting.
+        var words = RegisterWords.Depth(Base, 64, 64) with { StencilInfo = 1u };
+        var resolution = ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo);
+
+        Assert.NotNull(resolution);
+        var value = resolution.Value;
+        Assert.False(value.HasStencil);
+        Assert.Equal(Format.D32Sfloat, value.Format);
+        Assert.Equal(0UL, value.StencilAddress);
+        Assert.Equal(0UL, value.StencilSize);
+        Assert.Equal(ImageAspectFlags.DepthBit, value.Request.View.Aspect);
+        Assert.Empty(fatal.Messages);
+    }
+
+    [Fact]
+    public void DepthTarget_UnboundStencilWithHtileBuildsADepthOnlyHtileTarget()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var fatal = new FatalScope();
+        // stencilInfo=0x20000001 selects STENCIL8 with HTile stencil data disabled while no stencil surface
+        // is bound. The depth plane keeps its HTile metadata; only the stencil aspect is dropped.
+        const ulong htileBase = Base + 0x100000;
+        var words = RegisterWords.Depth(Base, 64, 64) with
+        {
+            ZInfo = (uint)GuestDepthFormat.Z32Float | (1u << 29),
+            StencilInfo = 0x20000001,
+            HtileBase = htileBase,
+        };
+        var resolution = ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo);
+
+        Assert.NotNull(resolution);
+        var value = resolution.Value;
+        Assert.False(value.HasStencil);
+        Assert.True(value.HasHtile);
+        Assert.Equal(Format.D32Sfloat, value.Format);
+        Assert.Equal(Base, value.DepthAddress);
+        Assert.Equal(0UL, value.StencilAddress);
+        Assert.Equal(0UL, value.StencilSize);
+        Assert.True(value.HtileSize > 0);
+        Assert.Equal(htileBase, value.HtileAddress);
+        Assert.Equal(ImageAspectFlags.DepthBit, value.Request.View.Aspect);
+        Assert.Equal(MetadataKind.Htile, value.Request.Description.Metadata.Kind);
+        Assert.False(value.Request.Description.Metadata.StencilCompressed);
+        Assert.Empty(fatal.Messages);
+    }
+
+    [Fact]
+    public void DepthTarget_UnboundStencilWithAnEnabledTestStaysLoud()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var fatal = new FatalScope();
+        // A stencil test without bound stencil memory cannot render depth-only: the test needs the plane.
+        var words = RegisterWords.Depth(Base, 64, 64) with { StencilInfo = 1u, DepthControl = 0x77u };
+        var error = Assert.Throws<SchedulerFatalException>(() => ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo));
+        Assert.Contains("without a bound stencil surface", error.Message);
+    }
+
+    [Fact]
+    public void DepthTarget_BoundStencilWithAMisalignedBaseStaysLoud()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var fatal = new FatalScope();
+        var words = RegisterWords.Depth(Base, 64, 64, stencilBase: Base + 1);
+        var error = Assert.Throws<SchedulerFatalException>(() => ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo));
+        Assert.Contains("stencil attachment state is not supported", error.Message);
+    }
+
+    [Fact]
+    public void DepthTarget_StaleStencilFormatWithoutActivityStaysIdle()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var fatal = new FatalScope();
+        // Stale format bit with nothing enabled must read exactly like the format-bit-clear
+        // idle draw: null, not a read-only depth-only target.
+        var words = RegisterWords.Depth(Base, 64, 64, depthTest: false, depthWrite: false) with { StencilInfo = 1u };
+        Assert.Null(ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo));
+        Assert.Empty(fatal.Messages);
+    }
+
+    [Fact]
+    public void DepthTarget_WriteDisabledStencilClearWithoutActivityStaysIdle()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        using var fatal = new FatalScope();
+        // A stencil clear whose writes are disabled is inert: with depth inactive it must be
+        // idle (null) exactly like the format-bit-clear draw, while a write-needing clear
+        // still reaches the loud rejection.
+        var words = RegisterWords.Depth(Base, 64, 64, depthTest: false, depthWrite: false) with
+        {
+            StencilInfo = 1u,
+            RenderControl = 1u << 1,
+            DepthView = 1u << 25,
+        };
+        Assert.Null(ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo));
+        Assert.Empty(fatal.Messages);
+    }
+
+    [Fact]
     public void DepthTarget_RejectsAMissingDepthBase()
     {
         if (!GatePrerequisites.Ready(_vulkan)) return;

@@ -96,11 +96,19 @@ public static partial class ImageRequestBuilders
 
     private static DepthTargetResolution? DepthTargetCore(in DepthTargetWords depthWords, IImageFormatSupport device, bool copyMode, bool writeBuffer)
     {
-        var hasStencil = depthWords.StencilFormat != GuestStencilFormat.Invalid;
+        var stencilFormatActive = depthWords.StencilFormat != GuestStencilFormat.Invalid;
+        // A stencil format without any bound stencil memory leaves no stencil aspect to attach. Guests can leave the
+        // format bit stale on a depth-only draw, so the aspect is honoured only when a surface is bound. A stencil
+        // test or write-needing clear that needs the missing plane stays loud below instead of silently rendering depth-only.
+        var stencilUnbound = depthWords.StencilReadBase == 0 && depthWords.StencilWriteBase == 0;
+        var hasStencil = stencilFormatActive && !stencilUnbound;
         if (!copyMode)
         {
             var depthActive = depthWords.DepthTestEnabled || depthWords.DepthWriteEnabled || depthWords.DepthBoundsEnabled || depthWords.DepthClearEnabled || depthWords.CopyDepthToColor;
-            var stencilActive = hasStencil && (depthWords.StencilTestEnabled || depthWords.StencilClearEnabled || depthWords.CopyStencilToColor);
+            // Activity follows the format bit so an enabled-but-unbound stencil test still reaches the loud
+            // rejection below instead of looking like an idle draw; the attachment itself follows hasStencil.
+            var stencilActive = stencilFormatActive && (depthWords.StencilTestEnabled ||
+                (depthWords.StencilClearEnabled && !depthWords.StencilWriteDisabled) || depthWords.CopyStencilToColor);
             if (!depthActive && !stencilActive)
             {
                 if (Rendering.RenderTrace.Enabled)
@@ -169,6 +177,14 @@ public static partial class ImageRequestBuilders
                     $"The stencil attachment state is not supported: stencilInfo=0x{depthWords.StencilInfo:X8} htile={hasHtile} read=0x{depthWords.StencilReadBase:X16} write=0x{depthWords.StencilWriteBase:X16}.");
             }
         }
+        else if (stencilFormatActive && !copyMode &&
+            (depthWords.StencilTestEnabled ||
+                (depthWords.StencilClearEnabled && !depthWords.StencilWriteDisabled)))
+        {
+            // The format bit is set but no stencil memory is bound while the draw still needs the plane.
+            throw SubmissionScheduler.Fatal(
+                $"Stencil test or write-needing clear is enabled without a bound stencil surface: stencilInfo=0x{depthWords.StencilInfo:X8} htile={hasHtile} read=0x{depthWords.StencilReadBase:X16} write=0x{depthWords.StencilWriteBase:X16}.");
+        }
         else if (!copyMode && (depthWords.StencilReadBase != 0 || depthWords.StencilWriteBase != 0))
         {
             throw SubmissionScheduler.Fatal($"Stencil state is set without an active stencil attachment: read=0x{depthWords.StencilReadBase:X16} write=0x{depthWords.StencilWriteBase:X16}.");
@@ -203,7 +219,9 @@ public static partial class ImageRequestBuilders
 
         var bytes = rule.BytesPerElement;
         var pitch = TileGeometry.DepthPitch(width, bytes, depthWords.SamplesLog2);
-        if (!TileGeometry.TryGetDepthSize(width, height, 0, depthWords.DepthFormat, depthWords.StencilFormat, hasHtile, out var stencilSize, out var htileSize, out var depthSize, depthWords.SamplesLog2) ||
+        // Size only the aspects the attachment keeps: an unbound stencil plane contributes no footprint.
+        var stencilFormat = hasStencil ? depthWords.StencilFormat : GuestStencilFormat.Invalid;
+        if (!TileGeometry.TryGetDepthSize(width, height, 0, depthWords.DepthFormat, stencilFormat, hasHtile, out var stencilSize, out var htileSize, out var depthSize, depthWords.SamplesLog2) ||
             depthSize.Align != 65536 || depthSize.Size == 0 ||
             hasStencil != (stencilSize.Align == 65536 && stencilSize.Size != 0) ||
             hasHtile != (htileSize.Align == 32768 && htileSize.Size != 0))
