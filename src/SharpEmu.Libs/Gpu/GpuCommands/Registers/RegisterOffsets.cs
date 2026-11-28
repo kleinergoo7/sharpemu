@@ -198,6 +198,13 @@ public static class ShaderRegisterOffset
     public const uint SpiShaderPgmRsrc2Gs = 0x08B;
     public const uint SpiShaderUserDataGs0 = 0x08C;
     public const uint SpiShaderUserAccumEsGs0 = 0x0B2;
+    // SPI_SHADER_PGM_RSRC3_ES is SH offset 0xC7 (MMIO 0x2CC7:
+    // mmSPI_SHADER_PGM_RSRC3_ES__CI__VI in si_ci_vi_merged_offset.h:6272,
+    // directly below PGM_LO_ES at 0x2CC8/SH 0xC8 per :6249). It carries only
+    // CU occupancy tuning (CU_EN[15:0], WAVE_LIMIT[21:16] per the mesa gfx8.json
+    // SPI_SHADER_PGM_RSRC3_GS field definitions, which the ES entry type_refs);
+    // the host GPU schedules compute units, so no bank state is modeled.
+    public const uint SpiShaderPgmRsrc3Es = 0x0C7;
     public const uint SpiShaderPgmLoEs = 0x0C8;
     public const uint SpiShaderPgmHiEs = 0x0C9;
     public const uint SpiShaderPgmRsrc1Es = 0x0CA;
