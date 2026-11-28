@@ -17,13 +17,9 @@ public static partial class Gen5SpirvTranslator
                 error = selection >= 0xE000 ? "unsupported FFT data-share swizzle" : "invalid data-share swizzle operands";
                 return false;
             }
-            if (_subgroupInvocationIdInput == 0)
-            {
-                error = "data-share swizzle requires subgroup lane access";
-                return false;
-            }
-
-            var lane = Load(_uintType, _subgroupInvocationIdInput);
+            // Graphics stages without native subgroup support run as a one-lane wave (GuestWaveLane):
+            // the swizzle reads the lane itself, like the DPP fallback, so no shuffle is emitted.
+            var lane = _subgroupInvocationIdInput == 0 ? UInt(0) : Load(_uintType, _subgroupInvocationIdInput);
             uint sourceLane;
             if (selection >= 0xC000)
             {
@@ -45,6 +41,21 @@ public static partial class Gen5SpirvTranslator
                 var selector = BitwiseXor(BitwiseOr(BitwiseAnd(lane, UInt(selection & 31)),
                     UInt((selection >> 5) & 31)), UInt((selection >> 10) & 31));
                 sourceLane = BitwiseOr(BitwiseAnd(lane, UInt(~31u)), selector);
+            }
+
+            if (_subgroupInvocationIdInput == 0)
+            {
+                var activeWord = _module.AddInstruction(
+                    SpirvOp.Select,
+                    _uintType,
+                    Load(_boolType, _exec),
+                    UInt(1),
+                    UInt(0));
+                var fallbackSourceActive = IsNotZero(ShuffleLane(activeWord, sourceLane));
+                var fallbackValue = ShuffleLane(GetRawSource(instruction, 0), sourceLane);
+                StoreV(instruction.Destinations[0].Value,
+                    _module.AddInstruction(SpirvOp.Select, _uintType, fallbackSourceActive, fallbackValue, UInt(0)));
+                return true;
             }
 
             // A ballot excludes inactive host lanes as well as lanes outside EXEC.
@@ -71,16 +82,27 @@ public static partial class Gen5SpirvTranslator
                 error = "invalid data-share bpermute operands";
                 return false;
             }
-            if (_subgroupInvocationIdInput == 0)
-            {
-                error = "data-share bpermute requires subgroup lane access";
-                return false;
-            }
-
-            var lane = Load(_uintType, _subgroupInvocationIdInput);
+            // Graphics stages without native subgroup support run as a one-lane wave (GuestWaveLane):
+            // the permute reads the lane itself, like the DPP fallback, so no shuffle is emitted.
+            var lane = _subgroupInvocationIdInput == 0 ? UInt(0) : Load(_uintType, _subgroupInvocationIdInput);
             var address = IAdd(GetRawSource(instruction, 0), UInt(control.SingleOffsetBytes));
             var index = BitwiseAnd(ShiftRightLogical(address, UInt(2)), UInt(31));
             var sourceLane = BitwiseOr(BitwiseAnd(lane, UInt(~31u)), index);
+
+            if (_subgroupInvocationIdInput == 0)
+            {
+                var activeWord = _module.AddInstruction(
+                    SpirvOp.Select,
+                    _uintType,
+                    Load(_boolType, _exec),
+                    UInt(1),
+                    UInt(0));
+                var fallbackSourceActive = IsNotZero(ShuffleLane(activeWord, sourceLane));
+                var fallbackValue = ShuffleLane(GetRawSource(instruction, 1), sourceLane);
+                StoreV(instruction.Destinations[0].Value,
+                    _module.AddInstruction(SpirvOp.Select, _uintType, fallbackSourceActive, fallbackValue, UInt(0)));
+                return true;
+            }
 
             // DS_BPERMUTE reads only from active lanes in the current 32-lane half-wave.
             var ballot = _module.AddInstruction(SpirvOp.GroupNonUniformBallot, _uvec4Type,
