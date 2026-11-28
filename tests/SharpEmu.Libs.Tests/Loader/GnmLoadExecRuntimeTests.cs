@@ -162,6 +162,7 @@ public sealed class GnmLoadExecRuntimeTests
         public string? LastRecentInstructionWindow => null;
         public string? LastRecentControlTransferTrace => null;
         public CpuSessionSummary LastSessionSummary => default;
+        public ulong LastEntryReturnValue { get; set; } = ulong.MaxValue;
 
         public OrbisGen2Result DispatchEntry(ulong entryPoint, Generation generation,
             IReadOnlyDictionary<ulong, string>? importStubs = null,

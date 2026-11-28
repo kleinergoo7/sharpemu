@@ -729,6 +729,10 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
         return false;
     }
 
+    internal static bool ShouldTolerateInitializerResult(OrbisGen2Result result, ulong rawReturnValue) =>
+        (result == OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_IMPLEMENTED ||
+            result == OrbisGen2Result.ORBIS_GEN2_ERROR_CPU_TRAP) && rawReturnValue == 1;
+
     private OrbisGen2Result? RunPreloadedModuleInitializers(
         IReadOnlyList<LoadedModuleImage> loadedModuleImages,
         Generation generation,
@@ -787,12 +791,15 @@ public sealed class SharpEmuRuntime : ISharpEmuRuntime
                 result == OrbisGen2Result.ORBIS_GEN2_OK);
             if (result != OrbisGen2Result.ORBIS_GEN2_OK)
             {
-                // PS4 module entry points may return a non-zero value that is not
-                // an OrbisGen2Result (for example, EAWebKit's loader stub returns 1).
-                // The guest decides how to interpret it via sceKernelLoadStartModule;
-                // an eagerly preloaded module has no such caller here. Tolerate only
-                // that known benign stub value; any other failure aborts preload.
-                if (result == (OrbisGen2Result)1)
+                // The raw guest return is mapped by DirectExecutionBackend.ExecuteEntry
+                // (src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs): any non-zero
+                // RAX becomes ORBIS_GEN2_ERROR_CPU_TRAP, which CpuDispatcher.DispatchEntryCore
+                // (src/SharpEmu.Core/Cpu/CpuDispatcher.cs) reports as NOT_IMPLEMENTED. A mapped
+                // result can therefore never equal the raw stub value 1; observe the raw RAX
+                // via ICpuDispatcher.LastEntryReturnValue instead. Tolerate only that known
+                // benign stub value; any other failure aborts preload.
+                var rawReturnValue = _cpuDispatcher.LastEntryReturnValue;
+                if (ShouldTolerateInitializerResult(result, rawReturnValue))
                 {
                     Console.Error.WriteLine(
                         $"[RUNTIME] Module start tolerated stub result: {moduleName} -> {result}");

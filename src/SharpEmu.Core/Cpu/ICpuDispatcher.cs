@@ -27,6 +27,8 @@ public interface ICpuDispatcher
 
     CpuSessionSummary LastSessionSummary { get; }
 
+    ulong LastEntryReturnValue { get; }
+
     OrbisGen2Result DispatchEntry(
         ulong entryPoint,
         Generation generation,

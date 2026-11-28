@@ -961,6 +961,8 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 
 	public string? LastError { get; private set; }
 
+	public ulong LastGuestEntryReturnValue { get; private set; } = ulong.MaxValue;
+
 	private unsafe static ulong ReadCtxU64(void* contextRecord, int offset)
 	{
 		return *(ulong*)((byte*)contextRecord + offset);
@@ -1208,6 +1210,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 		Volatile.Write(ref _globalUnresolvedReturnStub, (ulong)_unresolvedReturnStub);
 		result = OrbisGen2Result.ORBIS_GEN2_OK;
 		LastError = null;
+		LastGuestEntryReturnValue = ulong.MaxValue;
 		InitializeRuntimeSymbolIndex(runtimeSymbols);
 		_recentImportTraceCount = 0;
 		_recentImportTraceWriteIndex = 0;
@@ -7156,6 +7159,7 @@ public sealed unsafe partial class DirectExecutionBackend : INativeCpuBackend, I
 				Console.Error.WriteLine("[LOADER][ERROR] " + LastError);
 				return false;
 			}
+			LastGuestEntryReturnValue = num6;
 			if (num6 == 0)
 			{
 				result = OrbisGen2Result.ORBIS_GEN2_OK;

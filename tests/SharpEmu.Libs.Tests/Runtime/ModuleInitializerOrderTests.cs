@@ -4,6 +4,7 @@
 using SharpEmu.Core.Loader;
 using SharpEmu.Core.Memory;
 using SharpEmu.Core.Runtime;
+using SharpEmu.HLE;
 using Xunit;
 
 namespace SharpEmu.Libs.Tests.Runtime;
@@ -70,6 +71,19 @@ public sealed class ModuleInitializerOrderTests
         Assert.Equal(9, resolved.Handle);
         Assert.False(SharpEmuRuntime.TryResolveModuleByName("missing", modulesByName, out _));
     }
+
+    [Theory]
+    [InlineData(OrbisGen2Result.ORBIS_GEN2_OK, 1UL, false)]
+    [InlineData(OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_IMPLEMENTED, 1UL, true)]
+    [InlineData(OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_IMPLEMENTED, ulong.MaxValue, false)]
+    [InlineData(OrbisGen2Result.ORBIS_GEN2_ERROR_MEMORY_FAULT, 1UL, false)]
+    [InlineData(OrbisGen2Result.ORBIS_GEN2_ERROR_CPU_TRAP, 0UL, false)]
+    [InlineData(OrbisGen2Result.ORBIS_GEN2_ERROR_CPU_TRAP, 1UL, true)]
+    public void ShouldTolerateInitializerResult_MatchesOnlyBenignStubValue(
+        OrbisGen2Result result,
+        ulong rawReturnValue,
+        bool expected) =>
+        Assert.Equal(expected, SharpEmuRuntime.ShouldTolerateInitializerResult(result, rawReturnValue));
 
     private static SharpEmuRuntime.LoadedModuleImage Module(
         string name,

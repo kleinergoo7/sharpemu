@@ -80,6 +80,8 @@ public sealed class CpuDispatcher : ICpuDispatcher, IDisposable
 
     public CpuSessionSummary LastSessionSummary { get; private set; }
 
+    public ulong LastEntryReturnValue { get; private set; } = ulong.MaxValue;
+
     public OrbisGen2Result DispatchEntry(
         ulong entryPoint,
         Generation generation,
@@ -169,6 +171,7 @@ public sealed class CpuDispatcher : ICpuDispatcher, IDisposable
         LastRecentInstructionWindow = null;
         LastRecentControlTransferTrace = null;
         LastSessionSummary = default;
+        LastEntryReturnValue = ulong.MaxValue;
         OrbisGen2Result FailEarly(OrbisGen2Result result, CpuExitReason reason = CpuExitReason.UnhandledException)
         {
             LastSessionSummary = new CpuSessionSummary(
@@ -313,6 +316,7 @@ public sealed class CpuDispatcher : ICpuDispatcher, IDisposable
                 executionOptions,
                 out var nativeResult))
         {
+            LastEntryReturnValue = (_nativeCpuBackend as DirectExecutionBackend)?.LastGuestEntryReturnValue ?? ulong.MaxValue;
             debugHook?.OnFrameExit(debugFrame!, nativeResult);
             LastSessionSummary = new CpuSessionSummary(
                 nativeResult,
@@ -328,6 +332,7 @@ public sealed class CpuDispatcher : ICpuDispatcher, IDisposable
             return nativeResult;
         }
 
+        LastEntryReturnValue = (_nativeCpuBackend as DirectExecutionBackend)?.LastGuestEntryReturnValue ?? ulong.MaxValue;
         debugHook?.OnFrameExit(debugFrame!, OrbisGen2Result.ORBIS_GEN2_ERROR_NOT_IMPLEMENTED);
 
         var backendName = string.IsNullOrWhiteSpace(_nativeCpuBackend.BackendName)
