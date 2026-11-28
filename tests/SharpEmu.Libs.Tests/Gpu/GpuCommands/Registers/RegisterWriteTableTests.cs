@@ -549,4 +549,34 @@ public sealed class RegisterWriteTableTests
         Assert.Contains("unsupported=0x037F", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, 0x37F, 1)).Message);
         Assert.Contains("unsupported=0x0385", Assert.Throws<InvalidOperationException>(() => WriteUserConfig(banks, TextureGradientFactors, 1, 2, 3, 4)).Message);
     }
+
+    [Fact]
+    public void ShaderWriters_PgmRsrc3VsIsAnIgnoredSkip()
+    {
+        var banks = NewBanks();
+        var previousError = Console.Error;
+        using var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            Console.SetError(output);
+
+            // 0x46 is SPI_SHADER_PGM_RSRC3_VS: ignored on both the packet and table paths.
+            Assert.Equal(1u, WriteShader(banks, SpiShaderPgmRsrc3Vs, 0x003F_FFFF));
+            RegisterWriteTable.WriteShaderEntry(banks, SpiShaderPgmRsrc3Vs, 0x003F_FFFF, PacketAddress);
+
+            var report = output.ToString();
+            Assert.Contains("shader_rsrc3_vs_skip", report);
+            Assert.Contains("offset=0x0046", report);
+            Assert.Contains("value=0x003FFFFF", report);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        // Neighbors outside the ignored register stay fatal with the unsupported offset named.
+        Assert.Contains("unsupported=0x0045", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x45, 1)).Message);
+        Assert.Contains("unsupported=0x0047", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x47, 1)).Message);
+        Assert.Contains("unsupported=0x0047", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, SpiShaderPgmRsrc3Vs, 1, 2)).Message);
+    }
 }
