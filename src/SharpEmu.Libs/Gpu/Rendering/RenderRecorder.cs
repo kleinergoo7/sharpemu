@@ -1407,6 +1407,15 @@ internal sealed partial class RenderRecorder : IResolvedCommandSink
             ref var depth = ref state.Depth;
             var target = depth.Target.Target;
             var acquired = _host.AcquireDepthAttachment(in depth);
+            if (acquired.Image.IsValid && acquired.Image != depth.Image)
+            {
+                // The host retired the discovered image (a mid-frame depth rebind ends the pass and
+                // resolves again): refresh the state and the discovery cache so no later step consumes
+                // the stale identifier (transitions, kept attachments, in-place reuse).
+                depth.Image = acquired.Image;
+                _inPlace.FoundDepth = acquired.Image;
+            }
+
             depth.View = acquired.View;
             depth.MetadataClear = acquired.MetadataClear;
             if (acquired.View.Handle == 0 || acquired.Samples != target.Samples)

@@ -37,7 +37,7 @@ public readonly record struct ColorAttachmentAcquisition(
     bool MetadataClear,
     ClearColorValue MetadataClearValue);
 
-public readonly record struct DepthAttachmentAcquisition(ImageView View, uint Samples, bool MetadataClear);
+public readonly record struct DepthAttachmentAcquisition(ResourceSlotIdentifier Image, ImageView View, uint Samples, bool MetadataClear);
 
 public readonly record struct ScissorRectangle(int Left, int Top, int Right, int Bottom)
 {

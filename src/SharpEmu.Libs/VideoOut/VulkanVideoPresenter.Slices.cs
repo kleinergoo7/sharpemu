@@ -1559,7 +1559,7 @@ internal static unsafe partial class VulkanVideoPresenter
                     throw Serial("depth clear");
                 }
 
-                return new DepthAttachmentAcquisition(keptView, keptImage.Backing.Samples, false);
+                return new DepthAttachmentAcquisition(depth.Image, keptView, keptImage.Backing.Samples, false);
             }
 
             if (!_imageCache.TryPrepareDepthTargetViewForSlice(depth.Image, resolution.Request, out var view))
@@ -1585,7 +1585,7 @@ internal static unsafe partial class VulkanVideoPresenter
                 Requests.DepthClearKeys.Add((depth.Image, resolution.Request.View));
             }
 
-            return new DepthAttachmentAcquisition(view, image.Backing.Samples, false);
+            return new DepthAttachmentAcquisition(depth.Image, view, image.Backing.Samples, false);
         }
 
         private bool HasDepthClear(ResourceSlotIdentifier image, in ImageViewDescription view)

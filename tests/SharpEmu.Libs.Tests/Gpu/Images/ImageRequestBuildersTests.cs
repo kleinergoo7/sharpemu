@@ -703,6 +703,19 @@ public sealed class ImageRequestBuildersTests : IClassFixture<HeadlessVulkanFixt
     }
 
     [Fact]
+    public void DepthTarget_UsesReadBaseWhenWritesAreDisabled()
+    {
+        if (!GatePrerequisites.Ready(_vulkan)) return;
+        var readBase = Base;
+        var writeBase = Base + 0x10000;
+        var words = RegisterWords.Depth(readBase, 64, 64) with { ZWriteBase = writeBase, DepthView = 1u << 24 };
+        var result = ImageRequestBuilders.DepthTarget(words, _vulkan.DeviceInfo);
+
+        Assert.NotNull(result);
+        Assert.Equal(readBase, result.Value.DepthAddress);
+    }
+
+    [Fact]
     public void DepthTarget_RejectsAMissingDepthBase()
     {
         if (!GatePrerequisites.Ready(_vulkan)) return;

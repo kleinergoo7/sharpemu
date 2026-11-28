@@ -129,6 +129,12 @@ internal sealed class RecordingRenderHost : IRenderHost
 
     public bool DepthMetadataClear { get; set; }
 
+    // Depth addresses whose discovered image the host retires on first acquisition, resolving
+    // again after ending the pass like a mid-frame depth rebind.
+    public HashSet<ulong> RetiredDepthBases { get; } = new();
+
+    private readonly HashSet<ulong> _retiredDepths = new();
+
     public HashSet<ulong> MetadataAddresses { get; } = new();
 
     public HashSet<ulong> ClearableMetadata { get; } = new();
@@ -244,8 +250,19 @@ internal sealed class RecordingRenderHost : IRenderHost
     {
         var target = depth.Target.Target;
         Calls.Add($"acquire_depth {target.DepthAddress:X} image={depth.Image.Index} clear={depth.Target.State.DepthClearEnabled}");
+        var image = depth.Image;
+        if (RetiredDepthBases.Contains(target.DepthAddress) && _retiredDepths.Add(target.DepthAddress))
+        {
+            // The render host retired the discovered image and resolved again, ending the pass first.
+            EndRendering();
+            image = new ResourceSlotIdentifier(_nextImage++, 1);
+            _images[target.DepthAddress] = image;
+            Calls.Add($"reresolve_depth {target.DepthAddress:X} image={image.Index}");
+        }
+
         return new DepthAttachmentAcquisition(
-            new ImageView(0x2000 + depth.Image.Index),
+            image,
+            new ImageView(0x2000 + image.Index),
             ImageSamples.TryGetValue(target.DepthAddress, out var samples) ? samples : target.Samples,
             DepthMetadataClear);
     }

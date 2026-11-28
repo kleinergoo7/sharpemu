@@ -440,12 +440,32 @@ internal static unsafe partial class VulkanVideoPresenter
             }
 
             var resolution = depth.Target.Target;
-            if (IsStaleImage(depth.Image, out _))
+            var resolved = depth;
+            if (IsStaleImage(depth.Image, out var stale))
             {
-                throw SubmissionScheduler.Fatal($"The depth target changed after render-state discovery: address=0x{resolution.DepthAddress:X16}.");
+                // A depth rebind between passes (for example a shadow map followed by the main depth
+                // buffer) is normal guest behavior: real hardware ends the render pass and starts a new
+                // one. End the scope here and resolve the current target again instead of consuming the
+                // retired image. This mirrors the color-target re-resolution in AcquireColorAttachment.
+                var staleReason = stale is null ? "image not found"
+                    : !stale.Registered ? "image unregistered"
+                    : stale.DepthOwner.IsValid ? "depth ownership changed"
+                    : stale.Binding.NeedsRebind ? "rebind requested"
+                    : "target retired";
+                if (stale is not null)
+                {
+                    stale.Binding = default;
+                }
+
+                EndRendering();
+                var request = resolution.Request;
+                resolved.Image = _imageCache.FindImage(ref request);
+                BindRenderTarget(resolved.Image);
+                NoteDepthRebind(resolution.DepthAddress, staleReason);
+                resolution = resolution with { Request = request };
             }
 
-            var view = _imageCache.AcquireDepthTargetView(depth.Image, resolution.Request);
+            var view = _imageCache.AcquireDepthTargetView(resolved.Image, resolution.Request);
             EnsureBatchedGuestCommands();
             var layer = resolution.Request.View.BaseLayer;
             if (resolution.HasHtile && resolution.DepthClearEnabled && !_imageCache.ClearMetadata(resolution.HtileAddress))
@@ -464,8 +484,45 @@ internal static unsafe partial class VulkanVideoPresenter
                 _imageCache.NoteDepthClearValue(resolution.HtileAddress, depth.Target.State.DepthClearValue);
             }
 
-            var image = _imageCache.GetImage(depth.Image);
-            return new DepthAttachmentAcquisition(view, image.Backing.Samples, metadataClear);
+            var image = _imageCache.GetImage(resolved.Image);
+            return new DepthAttachmentAcquisition(resolved.Image, view, image.Backing.Samples, metadataClear);
+        }
+
+        // Re-resolution must never be silent, but a known-normal guest pattern must not spam either:
+        // count per address, log the first hit and then at most once a minute. Bounded so the table
+        // cannot grow without limit over a long session.
+        private static readonly object _depthRebindGate = new();
+        private static readonly Dictionary<ulong, (long Count, long LastLogTicks)> _depthRebindReports = new();
+        private const int MaxDepthRebindReports = 64;
+
+        private static void NoteDepthRebind(ulong depthAddress, string reason)
+        {
+            long count;
+            bool log;
+            lock (_depthRebindGate)
+            {
+                _depthRebindReports.TryGetValue(depthAddress, out var entry);
+                count = entry.Count + 1;
+                var now = Environment.TickCount64;
+                log = entry.Count == 0 || now - entry.LastLogTicks >= 60_000;
+                if (_depthRebindReports.Count >= MaxDepthRebindReports && entry.Count == 0)
+                {
+                    foreach (var tracked in _depthRebindReports.Keys)
+                    {
+                        _depthRebindReports.Remove(tracked);
+                        break;
+                    }
+                }
+
+                _depthRebindReports[depthAddress] = (count, log ? now : entry.LastLogTicks);
+            }
+
+            if (log)
+            {
+                Console.Error.WriteLine(
+                    $"[GPU][WARN] The depth target changed after render-state discovery: address=0x{depthAddress:X16} reason={reason} count={count}. " +
+                    "The render pass was split and the attachment was resolved again on the new target.");
+            }
         }
 
         // The image transition ends the scope only when it records a barrier.
