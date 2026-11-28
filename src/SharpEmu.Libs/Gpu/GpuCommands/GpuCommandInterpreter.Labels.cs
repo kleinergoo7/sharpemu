@@ -156,6 +156,19 @@ public sealed partial class GpuCommandInterpreter
                                 return;
                         }
                     }
+
+                    // Type 0x30 is already decoded as a plain write for 64-bit
+                    // labels with event index 0 (see the action-0x00 arm below);
+                    // its 32-bit end-of-shader form carries event index 6, mirroring
+                    // how 0x2F uses index 6 for 32-bit writes and index 0 for 64-bit
+                    // writes. No in-repo spec names 0x30, so only this observed
+                    // no-interrupt action-0x00 tuple is decoded; the writeback,
+                    // interrupt, and index-0 variants stay fatal.
+                    if (eopEventType == 0x30 && cacheAction == 0x00 && eventIndex == 0x06 && !withInterrupt)
+                    {
+                        Write32(destination, (uint)value, withWriteBack: false, withInterrupt, eventId, interruptContextId);
+                        return;
+                    }
                 }
                 else
                 {

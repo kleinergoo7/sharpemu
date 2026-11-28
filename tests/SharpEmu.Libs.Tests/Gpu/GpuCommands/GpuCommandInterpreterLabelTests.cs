@@ -154,6 +154,37 @@ public sealed class GpuCommandInterpreterLabelTests
         Assert.Equal(EndOfPipeWriteKind.WriteBack32, Assert.Single(runner.Host.EndOfPipeWrites).Kind);
     }
 
+    [Theory]
+    [InlineData(0x2Fu, 6u, 0x00u, EndOfPipeWriteKind.Write32)]
+    [InlineData(0x2Fu, 6u, 0x38u, EndOfPipeWriteKind.WriteBack32)]
+    [InlineData(0x30u, 6u, 0x00u, EndOfPipeWriteKind.Write32)]
+    public void EndOfShaderWrite32_AcceptedCombinations(uint eventType, uint eventIndex, uint cacheAction, EndOfPipeWriteKind expected)
+    {
+        var runner = new StreamRunner();
+        runner.Host.WriteQword(Label, ulong.MaxValue);
+
+        runner.Run(EventWriteEos(eventType, eventIndex, cacheAction, 2, 0, Label, 0x1234));
+
+        Assert.Equal(expected, Assert.Single(runner.Host.EndOfPipeWrites).Kind);
+        Assert.Equal(0xFFFF_FFFF_0000_1234UL, runner.Host.ReadQword(Label));
+    }
+
+    [Theory]
+    [InlineData(0x30u, 0u, 0x00u, 0u)]
+    [InlineData(0x30u, 6u, 0x38u, 0u)]
+    [InlineData(0x30u, 6u, 0x00u, 2u)]
+    [InlineData(0x31u, 6u, 0x00u, 0u)]
+    [InlineData(0x2Fu, 0u, 0x00u, 0u)]
+    public void EndOfShaderWrite32_RejectedCombinations(uint eventType, uint eventIndex, uint cacheAction, uint interruptSelector)
+    {
+        var runner = new StreamRunner();
+
+        var fatal = runner.RunExpectingFatal(EventWriteEos(eventType, eventIndex, cacheAction, 2, interruptSelector, Label, 1));
+
+        Assert.Contains("event type is unknown", fatal.Message);
+        Assert.Contains($"type=0x{eventType:X2}", fatal.Message);
+    }
+
     [Fact]
     public void GdsSource_SynchronizesReadsAndInterruptsAtOnce()
     {
