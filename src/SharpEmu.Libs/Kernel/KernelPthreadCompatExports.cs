@@ -7,6 +7,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Threading;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using SharpEmu.Libs.Diagnostics;
 
 namespace SharpEmu.Libs.Kernel;
@@ -2411,6 +2412,10 @@ public static class KernelPthreadCompatExports
         ProfileMutexHandoff(state, "WakeFinished", waiter: waiter, result: wakeCount);
     }
 
+    // Hot-path gate: called on every uncontended unlock. Kept as a separate
+    // tiny method with an inlining hint so the disabled case folds into a
+    // couple of static-bool tests at the call site instead of a call.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ProfileMutexHandoff(PthreadMutexState state, string stage, ulong address = 0,
         PthreadMutexWaiter? waiter = null, int result = 0)
     {
@@ -2874,6 +2879,10 @@ public static class KernelPthreadCompatExports
         return _tracePthreads;
     }
 
+    // Hot-path gate: evaluated inside every TracePthreadMutex call on the
+    // uncontended lock/unlock/trylock paths. Hinted inline so the common
+    // disabled case stays a null-check plus a static-bool read.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool ShouldTracePthreadMutex(ulong mutexAddress, ulong resolvedAddress)
     {
         if (_tracePthreadMutexFilter is null || _tracePthreadMutexFilter.Count == 0)

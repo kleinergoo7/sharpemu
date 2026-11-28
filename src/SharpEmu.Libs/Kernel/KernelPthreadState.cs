@@ -19,6 +19,14 @@ internal static class KernelPthreadState
     [ThreadStatic]
     private static ulong _currentThreadHandle;
 
+    // The identity table only ever gains entries: once the current host
+    // thread has ensured the bound guest handle, repeating the
+    // ConcurrentDictionary lookup on every lock/unlock/trylock from the
+    // same guest thread is pure overhead. The cache is keyed by handle, so
+    // a thread switch on this host thread re-ensures exactly once.
+    [ThreadStatic]
+    private static ulong _lastEnsuredGuestThreadHandle;
+
     [ThreadStatic]
     private static ulong _currentThreadUniqueId;
 
@@ -32,7 +40,11 @@ internal static class KernelPthreadState
         // thread is bound causes mutex owner mismatches (unlock PERM → hang).
         if (guestThreadHandle != 0)
         {
-            EnsureGuestThreadIdentity(guestThreadHandle);
+            if (_lastEnsuredGuestThreadHandle != guestThreadHandle)
+            {
+                EnsureGuestThreadIdentity(guestThreadHandle);
+                _lastEnsuredGuestThreadHandle = guestThreadHandle;
+            }
             return guestThreadHandle;
         }
 
