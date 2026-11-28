@@ -613,4 +613,38 @@ public sealed class RegisterWriteTableTests
         Assert.Contains("unsupported=0x00C6", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0xC6, 1)).Message);
         Assert.Contains("unsupported=0x00C6", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0xC6, 1, 2)).Message);
     }
+
+    [Fact]
+    public void ShaderWriters_PgmRsrc3LsIsAnIgnoredSkip()
+    {
+        var banks = NewBanks();
+        var previousError = Console.Error;
+        using var output = new StringWriter(System.Globalization.CultureInfo.InvariantCulture);
+        try
+        {
+            Console.SetError(output);
+
+            // 0x147 is SPI_SHADER_PGM_RSRC3_LS: ignored on both the packet and table paths.
+            Assert.Equal(1u, WriteShader(banks, SpiShaderPgmRsrc3Ls, 0x003F_FFFF));
+            RegisterWriteTable.WriteShaderEntry(banks, SpiShaderPgmRsrc3Ls, 0x003F_FFFF, PacketAddress);
+
+            var report = output.ToString();
+            Assert.Contains("shader_rsrc3_ls_skip", report);
+            Assert.Contains("offset=0x0147", report);
+            Assert.Contains("value=0x003FFFFF", report);
+
+            // A span starting at the ignored register still stores the modeled neighbor.
+            Assert.Equal(2u, WriteShader(banks, SpiShaderPgmRsrc3Ls, 0x003F_FFFF, 0x2000));
+            Assert.Equal(0x2000ul << 8, banks.Shader.Vertex.LocalAddress);
+        }
+        finally
+        {
+            Console.SetError(previousError);
+        }
+
+        // 0x146 has no writer while 0x148 is the modeled PGM_LO_LS: a span starting at
+        // the unknown head stays fatal with the unsupported offset named.
+        Assert.Contains("unsupported=0x0146", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x146, 1)).Message);
+        Assert.Contains("unsupported=0x0146", Assert.Throws<InvalidOperationException>(() => WriteShader(banks, 0x146, 1, 2)).Message);
+    }
 }

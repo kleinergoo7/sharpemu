@@ -93,6 +93,10 @@ internal static partial class RegisterWriters
         // the host GPU schedules compute units and no bank field consumes it.
         indirect[SpiShaderPgmRsrc3Es] = ShaderRsrc3EsEntry;
 
+        // SPI_SHADER_PGM_RSRC3_LS carries only CU occupancy tuning (CU_EN/WAVE_LIMIT);
+        // the host GPU schedules compute units and no bank field consumes it.
+        indirect[SpiShaderPgmRsrc3Ls] = ShaderRsrc3LsEntry;
+
         indirect[SpiShaderUserDataAddrLoPs] = static (banks, _, value) => banks.Shader.Pixel.UserDataAddress = (banks.Shader.Pixel.UserDataAddress & 0xFFFF_FFFF_0000_0000ul) | value;
         indirect[SpiShaderUserDataAddrHiPs] = static (banks, _, value) => banks.Shader.Pixel.UserDataAddress = (banks.Shader.Pixel.UserDataAddress & uint.MaxValue) | ((ulong)value << 32);
         indirect[SpiShaderAuxiliaryTableAddrLoPs] = static (banks, _, value) => banks.Shader.Pixel.AuxiliaryTableAddress = (banks.Shader.Pixel.AuxiliaryTableAddress & 0xFFFF_FFFF_0000_0000ul) | value;
@@ -303,6 +307,20 @@ internal static partial class RegisterWriters
         if (Interlocked.Increment(ref _shaderRsrc3EsSkipWarnings) <= 16)
         {
             Console.Error.WriteLine($"[LOADER][WARN] command_stream.shader_rsrc3_es_skip offset=0x{offset:X4} value=0x{value:X8}");
+        }
+    }
+
+    private static int _shaderRsrc3LsSkipWarnings;
+
+    // SPI_SHADER_PGM_RSRC3_LS tunes LS CU occupancy (CU_EN/WAVE_LIMIT) the emulator
+    // does not model (the host GPU schedules compute units and no bank field consumes
+    // it). Ignore the value loudly, mirroring the ES occupancy-tuning precedent, so a
+    // real use stays visible.
+    private static void ShaderRsrc3LsEntry(RegisterBanks banks, uint offset, uint value)
+    {
+        if (Interlocked.Increment(ref _shaderRsrc3LsSkipWarnings) <= 16)
+        {
+            Console.Error.WriteLine($"[LOADER][WARN] command_stream.shader_rsrc3_ls_skip offset=0x{offset:X4} value=0x{value:X8}");
         }
     }
 

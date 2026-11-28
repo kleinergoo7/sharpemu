@@ -175,12 +175,10 @@ public static class ShaderRegisterOffset
     public const uint SpiShaderPgmRsrc2Ps = 0x00B;
     public const uint SpiShaderUserDataPs0 = 0x00C;
     public const uint SpiShaderUserAccumPs0 = 0x032;
-    // SPI_SHADER_PGM_RSRC3_VS is SH offset 0x46 (MMIO 0x2C46:
-    // mmSPI_SHADER_PGM_RSRC3_VS__CI__VI in si_ci_vi_merged_offset.h; PGM_LO_VS
-    // follows at 0x2C48/SH 0x48 with LATE_ALLOC_VS at 0x2C47/SH 0x47). It carries
-    // only CU occupancy tuning (CU_EN[15:0], WAVE_LIMIT[21:16] per the mesa
-    // SPI_SHADER_PGM_RSRC3_GS/PS field definitions, which the VS register
-    // mirrors); the host GPU schedules compute units, so no bank state is modeled.
+    // SH offset 0x46, directly below PGM_LO_VS (SH 0x48 below). RSRC3-family
+    // occupancy-tuning register: no bank field consumes it (see
+    // VertexStageRegisters and the writer, which stores nothing), so the
+    // write is recorded loudly and ignored while the host GPU schedules CUs.
     public const uint SpiShaderPgmRsrc3Vs = 0x046;
     public const uint SpiShaderPgmLoVs = 0x048;
     public const uint SpiShaderPgmHiVs = 0x049;
@@ -198,12 +196,10 @@ public static class ShaderRegisterOffset
     public const uint SpiShaderPgmRsrc2Gs = 0x08B;
     public const uint SpiShaderUserDataGs0 = 0x08C;
     public const uint SpiShaderUserAccumEsGs0 = 0x0B2;
-    // SPI_SHADER_PGM_RSRC3_ES is SH offset 0xC7 (MMIO 0x2CC7:
-    // mmSPI_SHADER_PGM_RSRC3_ES__CI__VI in si_ci_vi_merged_offset.h:6272,
-    // directly below PGM_LO_ES at 0x2CC8/SH 0xC8 per :6249). It carries only
-    // CU occupancy tuning (CU_EN[15:0], WAVE_LIMIT[21:16] per the mesa gfx8.json
-    // SPI_SHADER_PGM_RSRC3_GS field definitions, which the ES entry type_refs);
-    // the host GPU schedules compute units, so no bank state is modeled.
+    // SH offset 0xC7, directly below PGM_LO_ES (SH 0xC8 below). RSRC3-family
+    // occupancy-tuning register: no bank field consumes it (see the writer,
+    // which stores nothing), so the write is recorded loudly and ignored
+    // while the host GPU schedules CUs.
     public const uint SpiShaderPgmRsrc3Es = 0x0C7;
     public const uint SpiShaderPgmLoEs = 0x0C8;
     public const uint SpiShaderPgmHiEs = 0x0C9;
@@ -221,6 +217,11 @@ public static class ShaderRegisterOffset
     public const uint SpiShaderPgmRsrc2Hs = 0x10B;
     public const uint SpiShaderUserDataHs0 = 0x10C;
     public const uint SpiShaderUserAccumLsHs0 = 0x132;
+    // SH offset 0x147, directly below PGM_LO_LS (SH 0x148 below). RSRC3-family
+    // occupancy-tuning register: no bank field consumes it (see the writer,
+    // which stores nothing), so the write is recorded loudly and ignored
+    // while the host GPU schedules CUs.
+    public const uint SpiShaderPgmRsrc3Ls = 0x147;
     public const uint SpiShaderPgmLoLs = 0x148;
     public const uint SpiShaderPgmHiLs = 0x149;
     public const uint ComputeStartX = 0x204;
